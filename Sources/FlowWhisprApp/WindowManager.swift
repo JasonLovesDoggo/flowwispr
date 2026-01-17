@@ -10,6 +10,10 @@ import AppKit
 @MainActor
 enum WindowManager {
     static func openMainWindow() {
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+
         guard let window = primaryWindow() else {
             NSApp.activate(ignoringOtherApps: true)
             return
