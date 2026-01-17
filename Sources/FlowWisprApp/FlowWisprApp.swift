@@ -18,8 +18,8 @@ struct FlowWisprApp: App {
             return nil
         }
         icon.isTemplate = true
-        // Scale to 80%
-        let scaledSize = NSSize(width: icon.size.width * 0.8, height: icon.size.height * 0.8)
+        // Scale to 75%
+        let scaledSize = NSSize(width: icon.size.width * 0.75, height: icon.size.height * 0.75)
         icon.size = scaledSize
         return icon
     }
