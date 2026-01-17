@@ -13,11 +13,14 @@ struct FlowWisprApp: App {
     @StateObject private var appState = AppState()
     
     private var menuBarIcon: NSImage? {
-        guard let iconURL = Bundle.module.url(forResource: "flow_wispr_menubar_18x18", withExtension: "png"),
+        guard let iconURL = Bundle.module.url(forResource: "menubar", withExtension: "svg"),
               let icon = NSImage(contentsOf: iconURL) else {
             return nil
         }
         icon.isTemplate = true
+        // Scale to 80%
+        let scaledSize = NSSize(width: icon.size.width * 0.8, height: icon.size.height * 0.8)
+        icon.size = scaledSize
         return icon
     }
 

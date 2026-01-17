@@ -55,8 +55,7 @@ let package = Package(
             ],
             path: "Sources/FlowWisprApp",
             resources: [
-                .copy("../../flow_wispr_menubar_18x18.png"),
-                .copy("../../flow_wispr_menubar_18x18@2x.png"),
+                .copy("../../menubar.svg"),
             ]
         ),
     ]
