@@ -27,7 +27,7 @@ let package = Package(
             linkerSettings: [
                 // Link to the Rust static library
                 .unsafeFlags([
-                    "-L", "flowwhispr-core/target/release",
+                    "-L", "flowwhispr-core/target/debug",
                     "-lflowwhispr_core"
                 ]),
                 // System frameworks needed by the Rust library
