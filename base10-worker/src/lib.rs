@@ -32,6 +32,9 @@ struct AudioInput {
 #[derive(Debug, Deserialize)]
 struct WhisperParams {
     audio_language: String,
+    /// Additional prompt hints (appended to "Hey Flow,")
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +44,8 @@ struct CompletionParams {
     app_context: Option<String>,
     #[serde(default)]
     shortcuts_triggered: Vec<String>,
+    #[serde(default)]
+    voice_instruction: Option<String>,
 }
 
 // ============ Base10 Types ============
@@ -63,6 +68,8 @@ struct Base10AudioInput {
 
 #[derive(Debug, Serialize)]
 struct Base10WhisperParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
     audio_language: String,
 }
 
@@ -192,16 +199,30 @@ fn get_mode_prompt(mode: &str) -> &'static str {
     }
 }
 
-async fn call_base10(env: &Env, audio_b64: String, audio_language: String) -> Result<String> {
+async fn call_base10(
+    env: &Env,
+    audio_b64: String,
+    audio_language: String,
+    user_prompt: Option<String>,
+) -> Result<String> {
     let api_key = env
         .var("BASETEN_API_KEY")
         .map_err(|_| worker::Error::RustError("Missing BASETEN_API_KEY".to_string()))?
         .to_string();
 
+    // Build prompt: always include "Hey Flow," plus any user-provided hints
+    let prompt = match user_prompt {
+        Some(extra) if !extra.is_empty() => format!("Hey Flow, {}", extra),
+        _ => "Hey Flow,".to_string(),
+    };
+
     let request = Base10Request {
         whisper_input: Base10WhisperInput {
             audio: Base10AudioInput { audio_b64 },
-            whisper_params: Base10WhisperParams { audio_language },
+            whisper_params: Base10WhisperParams {
+                prompt: Some(prompt),
+                audio_language,
+            },
         },
     };
 
@@ -251,6 +272,103 @@ async fn call_base10(env: &Env, audio_b64: String, audio_language: String) -> Re
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
         .ok_or_else(|| worker::Error::RustError("No transcription returned".to_string()))
+}
+
+const WAKE_PHRASE: &str = "hey flow";
+
+/// Extract voice command if text starts with "Hey Flow"
+fn extract_voice_command(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    if lower.starts_with(WAKE_PHRASE) {
+        let rest = text[WAKE_PHRASE.len()..].trim_start_matches([',', ' ']);
+        if !rest.is_empty() {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+fn build_instruction_prompt() -> String {
+    String::from(
+        "You are a ghostwriter. The user gives you a voice command describing what text to produce.\n\n\
+         Examples:\n\
+         - \"reject this person\" → Write a polite rejection message\n\
+         - \"say I'm running late\" → Write a message saying you're running late\n\
+         - \"make this professional: yo whats good\" → Transform to professional tone\n\
+         - \"translate to Spanish: see you tomorrow\" → Translate the text\n\n\
+         IMPORTANT: You write the ACTUAL TEXT they want to send. Not a description, not an acknowledgment.\n\
+         If they say \"reject him\", you write an actual rejection message like \"Thanks for reaching out, but I'll have to pass.\"\n\n\
+         Output ONLY the final text to send. Nothing else.",
+    )
+}
+
+async fn call_openrouter_instruction(env: &Env, instruction: &str) -> Result<String> {
+    let api_key = env
+        .var("OPENROUTER_API_KEY")
+        .map_err(|_| worker::Error::RustError("Missing OPENROUTER_API_KEY".to_string()))?
+        .to_string();
+
+    let system_prompt = build_instruction_prompt();
+
+    let request = OpenRouterRequest {
+        models: vec![
+            "meta-llama/llama-4-maverick:nitro".to_string(),
+            "openai/gpt-oss-120b:nitro".to_string(),
+        ],
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: instruction.to_string(),
+            },
+        ],
+        max_tokens: 1000,
+        temperature: 0.3,
+        provider: ProviderConfig {
+            allow_fallbacks: true,
+            sort: SortConfig {
+                by: "throughput".to_string(),
+                partition: "none".to_string(),
+            },
+        },
+    };
+
+    let body = serde_json::to_vec(&request)
+        .map_err(|e| worker::Error::RustError(format!("JSON serialize error: {}", e)))?;
+
+    let headers = Headers::new();
+    headers.set("Authorization", &format!("Bearer {}", api_key))?;
+    headers.set("Content-Type", "application/json")?;
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    init.with_body(Some(body.into()));
+    init.with_headers(headers);
+
+    let upstream = Request::new_with_init(OPENROUTER_API_URL, &init)?;
+    let mut response = Fetch::Request(upstream).send().await?;
+
+    if !response.status_code().to_string().starts_with('2') {
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(worker::Error::RustError(format!(
+            "OpenRouter error {}: {}",
+            response.status_code(),
+            error_text
+        )));
+    }
+
+    let response_text = response.text().await?;
+    let openrouter_response: OpenRouterResponse = serde_json::from_str(&response_text)
+        .map_err(|e| worker::Error::RustError(format!("JSON parse error: {}", e)))?;
+
+    openrouter_response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.clone())
+        .ok_or_else(|| worker::Error::RustError("No completion returned".to_string()))
 }
 
 async fn call_openrouter(
@@ -347,18 +465,32 @@ pub async fn main(mut req: Request, env: Env, _ctx: worker::Context) -> Result<R
         &env,
         request.whisper_input.audio.audio_b64,
         request.whisper_input.whisper_params.audio_language,
+        request.whisper_input.whisper_params.prompt,
     )
     .await?;
 
     // Step 2: Format with LLM
-    let text = call_openrouter(
-        &env,
-        &transcription,
-        &request.completion.mode,
-        request.completion.app_context.as_deref(),
-        &request.completion.shortcuts_triggered,
-    )
-    .await?;
+    // Check for voice command: explicit from request OR auto-detected from transcription
+    let voice_instruction = request
+        .completion
+        .voice_instruction
+        .clone()
+        .or_else(|| extract_voice_command(&transcription));
+
+    let text = if let Some(instruction) = voice_instruction {
+        // Voice command mode - use instruction prompt
+        call_openrouter_instruction(&env, &instruction).await?
+    } else {
+        // Normal formatting mode
+        call_openrouter(
+            &env,
+            &transcription,
+            &request.completion.mode,
+            request.completion.app_context.as_deref(),
+            &request.completion.shortcuts_triggered,
+        )
+        .await?
+    };
 
     // Step 3: Return
     let response = CombinedResponse {

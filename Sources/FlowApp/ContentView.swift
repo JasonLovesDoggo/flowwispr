@@ -68,6 +68,8 @@ struct ContentView: View {
                             RecordView()
                         case .shortcuts:
                             ShortcutsContentView()
+                        case .corrections:
+                            CorrectionsContentView()
                         case .settings:
                             SettingsContentView()
                         }

@@ -583,6 +583,7 @@ fn transcribe_with_audio(
             mode: mode_str.to_string(),
             app_context: app_name.clone(),
             shortcuts_triggered: Vec::new(),
+            voice_instruction: None, // Worker auto-detects from transcription
         })
     } else {
         None
@@ -948,6 +949,117 @@ pub extern "C" fn flow_learn_from_edit(
 pub extern "C" fn flow_correction_count(handle: *mut FlowHandle) -> usize {
     let handle = unsafe { &*handle };
     handle.learning.cache_size()
+}
+
+/// Get all corrections as JSON
+/// Returns JSON array: [{"id": "...", "original": "...", "corrected": "...", "occurrences": N, "confidence": N.N}, ...]
+/// Caller must free the returned string with flow_free_string
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_get_corrections_json(handle: *mut FlowHandle) -> *mut c_char {
+    let handle = unsafe { &*handle };
+
+    let corrections = match handle.storage.get_all_corrections() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to get corrections: {}", e);
+            return ptr::null_mut();
+        }
+    };
+
+    let json_array: Vec<serde_json::Value> = corrections
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id.to_string(),
+                "original": c.original,
+                "corrected": c.corrected,
+                "occurrences": c.occurrences,
+                "confidence": c.confidence,
+                "source": format!("{:?}", c.source),
+                "created_at": c.created_at.to_rfc3339(),
+                "updated_at": c.updated_at.to_rfc3339(),
+            })
+        })
+        .collect();
+
+    match CString::new(serde_json::to_string(&json_array).unwrap_or_default()) {
+        Ok(cstr) => cstr.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Delete a correction by ID
+/// Returns true if the correction was deleted, false if not found or on error
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_delete_correction(handle: *mut FlowHandle, id: *const c_char) -> bool {
+    if id.is_null() {
+        return false;
+    }
+
+    let handle = unsafe { &*handle };
+
+    let id_str = match unsafe { CStr::from_ptr(id) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let uuid = match uuid::Uuid::parse_str(id_str) {
+        Ok(u) => u,
+        Err(_) => {
+            error!("Invalid UUID: {}", id_str);
+            return false;
+        }
+    };
+
+    // First, get the correction to find the original word (for cache removal)
+    if let Ok(corrections) = handle.storage.get_all_corrections() {
+        if let Some(correction) = corrections.iter().find(|c| c.id == uuid) {
+            let original = correction.original.clone();
+
+            // Delete from storage
+            match handle.storage.delete_correction(&uuid) {
+                Ok(deleted) => {
+                    if deleted {
+                        // Remove from cache
+                        handle.learning.remove_from_cache(&original);
+                        debug!(
+                            "Deleted correction: {} -> {}",
+                            original, correction.corrected
+                        );
+                    }
+                    deleted
+                }
+                Err(e) => {
+                    error!("Failed to delete correction: {}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+/// Delete all corrections
+/// Returns the number of corrections deleted
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_delete_all_corrections(handle: *mut FlowHandle) -> usize {
+    let handle = unsafe { &*handle };
+
+    match handle.storage.delete_all_corrections() {
+        Ok(count) => {
+            // Clear the cache
+            handle.learning.clear_cache();
+            debug!("Deleted all {} corrections", count);
+            count
+        }
+        Err(e) => {
+            error!("Failed to delete all corrections: {}", e);
+            0
+        }
+    }
 }
 
 // ============ Stats ============

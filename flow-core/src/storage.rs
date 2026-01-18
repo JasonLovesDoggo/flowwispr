@@ -597,6 +597,63 @@ impl Storage {
         Ok(corrections)
     }
 
+    /// Get all corrections (regardless of confidence)
+    pub fn get_all_corrections(&self) -> Result<Vec<Correction>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, original, corrected, occurrences, confidence, source, created_at, updated_at
+            FROM corrections
+            ORDER BY confidence DESC, occurrences DESC
+            "#,
+        )?;
+
+        let corrections = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let source_str: String = row.get(5)?;
+                let created_at_str: String = row.get(6)?;
+                let updated_at_str: String = row.get(7)?;
+
+                Ok(Correction {
+                    id: Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::new_v4()),
+                    original: row.get(1)?,
+                    corrected: row.get(2)?,
+                    occurrences: row.get(3)?,
+                    confidence: row.get(4)?,
+                    source: parse_correction_source(&source_str),
+                    created_at: DateTime::parse_from_rfc3339(&created_at_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(corrections)
+    }
+
+    /// Delete a correction by ID
+    pub fn delete_correction(&self, id: &Uuid) -> Result<bool> {
+        let conn = self.conn.lock();
+        let rows_affected = conn.execute(
+            "DELETE FROM corrections WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        debug!("Deleted correction {}: {} rows affected", id, rows_affected);
+        Ok(rows_affected > 0)
+    }
+
+    /// Delete all corrections
+    pub fn delete_all_corrections(&self) -> Result<usize> {
+        let conn = self.conn.lock();
+        let rows_affected = conn.execute("DELETE FROM corrections", [])?;
+        debug!("Deleted all corrections: {} rows affected", rows_affected);
+        Ok(rows_affected)
+    }
+
     // ========== Analytics event methods ==========
 
     /// Save an analytics event
@@ -1079,5 +1136,50 @@ mod tests {
 
         let value = storage.get_setting(SETTING_OPENAI_API_KEY).unwrap();
         assert_eq!(value, Some("test-key".to_string()));
+    }
+
+    #[test]
+    fn test_correction_deletion() {
+        let storage = Storage::in_memory().unwrap();
+
+        // Create and save multiple corrections
+        let correction1 = Correction::new(
+            "teh".to_string(),
+            "the".to_string(),
+            CorrectionSource::UserEdit,
+        );
+        let correction2 = Correction::new(
+            "recieve".to_string(),
+            "receive".to_string(),
+            CorrectionSource::UserEdit,
+        );
+
+        storage.save_correction(&correction1).unwrap();
+        storage.save_correction(&correction2).unwrap();
+
+        // Verify both exist
+        let all = storage.get_all_corrections().unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Delete one correction
+        let deleted = storage.delete_correction(&correction1.id).unwrap();
+        assert!(deleted);
+
+        // Verify only one remains
+        let remaining = storage.get_all_corrections().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].original, "recieve");
+
+        // Delete non-existent correction
+        let not_deleted = storage.delete_correction(&uuid::Uuid::new_v4()).unwrap();
+        assert!(!not_deleted);
+
+        // Delete all corrections
+        let deleted_count = storage.delete_all_corrections().unwrap();
+        assert_eq!(deleted_count, 1);
+
+        // Verify none remain
+        let empty = storage.get_all_corrections().unwrap();
+        assert!(empty.is_empty());
     }
 }

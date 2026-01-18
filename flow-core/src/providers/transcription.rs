@@ -30,6 +30,9 @@ pub struct CompletionParams {
     pub app_context: Option<String>,
     /// Shortcut replacement texts that must be preserved exactly
     pub shortcuts_triggered: Vec<String>,
+    /// Voice instruction (e.g., "reject him politely", "translate to Spanish")
+    /// When present, worker uses instruction mode instead of normal formatting
+    pub voice_instruction: Option<String>,
 }
 
 impl TranscriptionRequest {

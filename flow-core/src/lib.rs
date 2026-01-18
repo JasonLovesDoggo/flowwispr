@@ -16,6 +16,7 @@ pub mod providers;
 pub mod shortcuts;
 pub mod storage;
 pub mod types;
+pub mod voice_commands;
 pub mod whisper_models;
 
 pub use error::{Error, Result};

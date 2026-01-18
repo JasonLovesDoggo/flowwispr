@@ -219,6 +219,35 @@ impl LearningEngine {
     pub fn cache_size(&self) -> usize {
         self.corrections.read().len()
     }
+
+    /// Remove a correction from the cache by original word
+    pub fn remove_from_cache(&self, original: &str) {
+        self.corrections.write().remove(&original.to_lowercase());
+    }
+
+    /// Reload corrections from storage (useful after deleting)
+    pub fn reload_from_storage(
+        &self,
+        storage: &crate::storage::Storage,
+    ) -> crate::error::Result<()> {
+        let corrections = storage.get_corrections(self.min_confidence)?;
+
+        let mut cache = self.corrections.write();
+        cache.clear();
+        for correction in corrections {
+            cache.insert(
+                correction.original.to_lowercase(),
+                CachedCorrection {
+                    corrected: correction.corrected,
+                    confidence: correction.confidence,
+                },
+            );
+        }
+
+        info!("Reloaded {} corrections into learning engine", cache.len());
+
+        Ok(())
+    }
 }
 
 impl Default for LearningEngine {

@@ -99,6 +99,9 @@ final class AppState: ObservableObject {
         setupModelLoadingPoller()
         updateCurrentApp()
         refreshHistory()
+
+        // Configure the edit learning service
+        EditLearningService.shared.configure(engine: engine)
     }
 
     func cleanup() {
@@ -631,6 +634,14 @@ final class AppState: ObservableObject {
             "target_app": targetApplication?.localizedName ?? "Unknown",
             "text_length": NSPasteboard.general.string(forType: .string)?.count ?? 0
         ])
+
+        // Start monitoring for edits to learn from user corrections
+        if let pastedText = lastTranscription {
+            EditLearningService.shared.startMonitoring(
+                originalText: pastedText,
+                targetApp: targetApplication
+            )
+        }
     }
 
     private func activateTargetAppIfNeeded() {

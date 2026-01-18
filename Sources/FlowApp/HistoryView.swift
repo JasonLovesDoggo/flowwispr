@@ -133,13 +133,13 @@ private struct HistoryRowView: View {
                         .foregroundStyle(FW.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    #if DEBUG
+//                    #if DEBUG
                     if isHovering && !item.rawText.isEmpty {
                         Text(item.rawText)
                             .font(.caption)
                             .foregroundStyle(FW.textMuted)
                     }
-                    #endif
+//                    #endif
                 } else {
                     HStack(spacing: FW.spacing6) {
                         Text("Failed")

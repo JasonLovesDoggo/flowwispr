@@ -119,6 +119,23 @@ bool flow_learn_from_edit(FlowHandle* handle, const char* original, const char* 
 /// @return Number of corrections
 size_t flow_correction_count(FlowHandle* handle);
 
+/// Get all corrections as JSON
+/// @param handle Engine handle
+/// @return JSON array string (caller must free with flow_free_string)
+/// Format: [{"id": "...", "original": "...", "corrected": "...", "occurrences": N, "confidence": N.N}, ...]
+char* flow_get_corrections_json(FlowHandle* handle);
+
+/// Delete a correction by ID
+/// @param handle Engine handle
+/// @param id UUID string of the correction to delete
+/// @return true if deleted, false if not found or on error
+bool flow_delete_correction(FlowHandle* handle, const char* id);
+
+/// Delete all corrections
+/// @param handle Engine handle
+/// @return Number of corrections deleted
+size_t flow_delete_all_corrections(FlowHandle* handle);
+
 // ============ Stats ============
 
 /// Get total transcription time in minutes

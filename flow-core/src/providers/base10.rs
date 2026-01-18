@@ -57,6 +57,8 @@ struct WorkerCompletionParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     app_context: Option<String>,
     shortcuts_triggered: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    voice_instruction: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +98,7 @@ impl TranscriptionProvider for Base10TranscriptionProvider {
                 mode: completion.mode,
                 app_context: completion.app_context,
                 shortcuts_triggered: completion.shortcuts_triggered,
+                voice_instruction: completion.voice_instruction,
             },
         };
 

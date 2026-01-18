@@ -436,7 +436,7 @@ private struct StatsSection: View {
                 statItem(
                     icon: "brain.head.profile",
                     value: "\(appState.engine.correctionCount)",
-                    label: "Corrections"
+                    label: "Learnings"
                 )
                 statItem(
                     icon: "clock",
@@ -488,7 +488,7 @@ private struct AboutFooter: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(FW.textPrimary)
 
-                Text("v0.1.9")
+                Text("v0.2.0")
                     .font(.caption)
                     .foregroundStyle(FW.textMuted)
             }

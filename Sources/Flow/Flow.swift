@@ -137,6 +137,18 @@ public enum TranscriptionMode: Sendable {
     }
 }
 
+/// A learned correction from user edits
+public struct Correction: Identifiable, Sendable {
+    public let id: String
+    public let original: String
+    public let corrected: String
+    public let occurrences: Int
+    public let confidence: Double
+    public let source: String
+    public let createdAt: Date
+    public let updatedAt: Date
+}
+
 /// Main interface to the Flow engine
 public final class Flow: @unchecked Sendable {
     private let handle: OpaquePointer?
@@ -336,6 +348,76 @@ public final class Flow: @unchecked Sendable {
     public var correctionCount: Int {
         guard let handle = handle else { return 0 }
         return flow_correction_count(handle)
+    }
+
+    /// Get all learned corrections
+    public var corrections: [Correction] {
+        guard let handle = handle else { return [] }
+        guard let cString = flow_get_corrections_json(handle) else { return [] }
+        let jsonString = String(cString: cString)
+        flow_free_string(cString)
+
+        guard let data = jsonString.data(using: .utf8) else { return [] }
+
+        struct RawCorrection: Decodable {
+            let id: String
+            let original: String
+            let corrected: String
+            let occurrences: Int
+            let confidence: Double
+            let source: String
+            let created_at: String
+            let updated_at: String
+        }
+
+        let decoder = JSONDecoder()
+        guard let rawCorrections = try? decoder.decode([RawCorrection].self, from: data) else {
+            return []
+        }
+
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let standardFormatter = ISO8601DateFormatter()
+        standardFormatter.formatOptions = [.withInternetDateTime]
+
+        return rawCorrections.map { raw in
+            let createdAt = dateFormatter.date(from: raw.created_at)
+                ?? standardFormatter.date(from: raw.created_at)
+                ?? Date()
+            let updatedAt = dateFormatter.date(from: raw.updated_at)
+                ?? standardFormatter.date(from: raw.updated_at)
+                ?? Date()
+
+            return Correction(
+                id: raw.id,
+                original: raw.original,
+                corrected: raw.corrected,
+                occurrences: raw.occurrences,
+                confidence: raw.confidence,
+                source: raw.source,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        }
+    }
+
+    /// Delete a correction by ID
+    /// - Parameter id: The UUID string of the correction to delete
+    /// - Returns: true if the correction was deleted
+    public func deleteCorrection(id: String) -> Bool {
+        guard let handle = handle else { return false }
+        return id.withCString { cId in
+            flow_delete_correction(handle, cId)
+        }
+    }
+
+    /// Delete all corrections
+    /// - Returns: The number of corrections deleted
+    @discardableResult
+    public func deleteAllCorrections() -> Int {
+        guard let handle = handle else { return 0 }
+        return flow_delete_all_corrections(handle)
     }
 
     // MARK: - Stats

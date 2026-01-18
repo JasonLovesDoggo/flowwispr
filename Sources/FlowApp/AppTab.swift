@@ -10,6 +10,7 @@ import Foundation
 enum AppTab: String, CaseIterable {
     case record = "Record"
     case shortcuts = "Shortcuts"
+    case corrections = "Learnings"
     case settings = "Settings"
 
     var icon: String {
@@ -18,6 +19,8 @@ enum AppTab: String, CaseIterable {
             return "waveform.circle"
         case .shortcuts:
             return "bolt.fill"
+        case .corrections:
+            return "brain.head.profile"
         case .settings:
             return "gear"
         }
