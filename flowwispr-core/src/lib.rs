@@ -14,6 +14,7 @@ pub mod providers;
 pub mod shortcuts;
 pub mod storage;
 pub mod types;
+pub mod whisper_models;
 
 pub use error::{Error, Result};
 pub use types::*;

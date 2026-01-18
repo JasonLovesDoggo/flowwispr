@@ -74,6 +74,29 @@ public enum CompletionProvider: UInt8, Sendable {
     }
 }
 
+/// Whisper model sizes for local transcription
+public enum WhisperModel: UInt8, Sendable {
+    case tiny = 0
+    case base = 1
+    case small = 2
+
+    public var displayName: String {
+        switch self {
+        case .tiny: return "Tiny (75MB)"
+        case .base: return "Base (142MB)"
+        case .small: return "Small (466MB)"
+        }
+    }
+
+    public var sizeDescription: String {
+        switch self {
+        case .tiny: return "Fastest, least accurate"
+        case .base: return "Good balance"
+        case .small: return "Better accuracy"
+        }
+    }
+}
+
 /// Main interface to the FlowWispr engine
 public final class FlowWispr: @unchecked Sendable {
     private let handle: OpaquePointer?
@@ -477,6 +500,14 @@ public final class FlowWispr: @unchecked Sendable {
         guard let handle = handle else { return nil }
         let rawValue = flowwispr_get_completion_provider(handle)
         return CompletionProvider(rawValue: rawValue)
+    }
+
+    /// Enable local Whisper transcription with Metal acceleration
+    /// - Parameter model: The Whisper model to use
+    /// - Returns: true on success
+    public func enableLocalWhisper(_ model: WhisperModel) -> Bool {
+        guard let handle = handle else { return false }
+        return flowwispr_enable_local_whisper(handle, model.rawValue)
     }
 
     // Configuration persistence is handled in the core database.

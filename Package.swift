@@ -56,6 +56,12 @@ let package = Package(
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
+                // Metal frameworks for Candle GPU acceleration
+                .linkedFramework("Metal"),
+                .linkedFramework("MetalKit"),
+                .linkedFramework("MetalPerformanceShaders"),
+                .linkedFramework("Accelerate"),
+                .linkedFramework("Foundation"),
             ]
         ),
         // Swift wrapper

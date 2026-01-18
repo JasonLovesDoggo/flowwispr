@@ -23,8 +23,8 @@ use crate::learning::LearningEngine;
 use crate::modes::{StyleLearner, WritingMode, WritingModeEngine};
 use crate::providers::{
     CompletionProvider, CompletionRequest, GeminiCompletionProvider, GeminiTranscriptionProvider,
-    OpenAICompletionProvider, OpenAITranscriptionProvider, OpenRouterCompletionProvider,
-    TranscriptionProvider, TranscriptionRequest,
+    LocalWhisperTranscriptionProvider, OpenAICompletionProvider, OpenAITranscriptionProvider,
+    OpenRouterCompletionProvider, TranscriptionProvider, TranscriptionRequest, WhisperModel,
 };
 use crate::shortcuts::ShortcutsEngine;
 use crate::storage::{
@@ -1141,6 +1141,54 @@ pub extern "C" fn flowwispr_get_completion_provider(handle: *mut FlowWhisprHandl
         "OpenRouter" => 2,
         _ => 255,
     }
+}
+
+/// Enable local Whisper transcription with Metal acceleration
+/// model: 0 = Tiny, 1 = Base, 2 = Small
+/// Returns true on success, false on failure
+#[unsafe(no_mangle)]
+pub extern "C" fn flowwispr_enable_local_whisper(
+    handle: *mut FlowWhisprHandle,
+    model: u8,
+) -> bool {
+    let handle = unsafe { &mut *handle };
+
+    let whisper_model = match model {
+        0 => WhisperModel::Tiny,
+        1 => WhisperModel::Base,
+        2 => WhisperModel::Small,
+        _ => {
+            set_last_error(handle, "Invalid Whisper model selection");
+            return false;
+        }
+    };
+
+    // Get models directory
+    let models_dir = match crate::whisper_models::get_models_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            let message = format!("Failed to get models directory: {}", e);
+            error!("{}", message);
+            set_last_error(handle, message);
+            return false;
+        }
+    };
+
+    // Create provider
+    let provider = Arc::new(LocalWhisperTranscriptionProvider::new(whisper_model, models_dir));
+
+    // Trigger model download/load asynchronously
+    let provider_clone = Arc::clone(&provider);
+    handle.runtime.spawn(async move {
+        if let Err(e) = provider_clone.load_model().await {
+            error!("Failed to load Whisper model: {}", e);
+        }
+    });
+
+    handle.transcription = provider;
+    debug!("Enabled local Whisper transcription with {:?} model", whisper_model);
+
+    true
 }
 
 /// Get all shortcuts as JSON (caller must free with flowwispr_free_string)
