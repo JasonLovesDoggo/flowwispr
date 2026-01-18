@@ -14,6 +14,17 @@ struct RecordView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
+                // Header section
+                headerSection
+                    .padding(.horizontal, FW.spacing24)
+                    .padding(.top, FW.spacing24)
+                    .padding(.bottom, FW.spacing24)
+
+                // Stats bars
+                statsSection
+                    .padding(.horizontal, FW.spacing24)
+                    .padding(.bottom, FW.spacing24)
+
                 if let errorMessage = appState.errorMessage {
                     errorBanner(text: errorMessage)
                         .padding(.horizontal, FW.spacing24)
@@ -66,6 +77,121 @@ struct RecordView: View {
         .background(FW.surfacePrimary)
     }
 
+    // MARK: - Header Section
+
+    private var headerSection: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: FW.spacing8) {
+                Text("Good evening")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(FW.textPrimary)
+
+                Text("Ready to capture your thoughts")
+                    .font(.body)
+                    .foregroundStyle(FW.textSecondary)
+            }
+        }
+    }
+
+    // MARK: - Stats Section
+
+    private var statsSection: some View {
+        HStack(spacing: FW.spacing16) {
+            // Today stat
+            VStack(alignment: .leading, spacing: FW.spacing8) {
+                HStack(spacing: FW.spacing8) {
+                    Image(systemName: "mic.fill")
+                        .font(.body)
+                        .foregroundStyle(.blue)
+                        .frame(width: 40, height: 40)
+                        .background {
+                            Circle()
+                                .fill(Color.blue.opacity(0.15))
+                        }
+
+                    VStack(alignment: .leading, spacing: FW.spacing4) {
+                        Text("3")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(FW.textPrimary)
+
+                        Text("Today")
+                            .font(.caption)
+                            .foregroundStyle(FW.textSecondary)
+                    }
+
+                    Spacer()
+                }
+            }
+            .padding(FW.spacing16)
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(FW.surfaceElevated.opacity(0.5))
+            }
+
+            // Success rate stat
+            VStack(alignment: .leading, spacing: FW.spacing8) {
+                HStack(spacing: FW.spacing8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(.green)
+                        .frame(width: 40, height: 40)
+                        .background {
+                            Circle()
+                                .fill(Color.green.opacity(0.15))
+                        }
+
+                    VStack(alignment: .leading, spacing: FW.spacing4) {
+                        Text("60%")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(FW.textPrimary)
+
+                        Text("Success rate")
+                            .font(.caption)
+                            .foregroundStyle(FW.textSecondary)
+                    }
+
+                    Spacer()
+                }
+            }
+            .padding(FW.spacing16)
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(FW.surfaceElevated.opacity(0.5))
+            }
+
+            // Total stat
+            VStack(alignment: .leading, spacing: FW.spacing8) {
+                HStack(spacing: FW.spacing8) {
+                    Image(systemName: "clock.fill")
+                        .font(.body)
+                        .foregroundStyle(.gray)
+                        .frame(width: 40, height: 40)
+                        .background {
+                            Circle()
+                                .fill(Color.gray.opacity(0.15))
+                        }
+
+                    VStack(alignment: .leading, spacing: FW.spacing4) {
+                        Text("5")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(FW.textPrimary)
+
+                        Text("Total")
+                            .font(.caption)
+                            .foregroundStyle(FW.textSecondary)
+                    }
+
+                    Spacer()
+                }
+            }
+            .padding(FW.spacing16)
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(FW.surfaceElevated.opacity(0.5))
+            }
+        }
+    }
+
     // MARK: - Hero Section
 
     private var heroSection: some View {
@@ -77,21 +203,29 @@ struct RecordView: View {
 
             // big record button
             Button(action: { appState.toggleRecording() }) {
-                HStack(spacing: FW.spacing12) {
-                    Image(systemName: appState.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 18, weight: .semibold))
+                if appState.isRecording {
+                    HStack(spacing: FW.spacing12) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 18, weight: .semibold))
 
-                    if appState.isRecording {
                         Text(formatDuration(appState.recordingDuration))
                             .font(FW.fontMonoLarge)
-                    } else {
-                        Text("Record")
-                            .font(.headline)
                     }
+                } else {
+                    Text("Record")
+                        .font(.system(size: 18, weight: .semibold))
                 }
-                .frame(minWidth: 160)
             }
-            .buttonStyle(FWPrimaryButtonStyle(isRecording: appState.isRecording))
+            .frame(width: 220)
+            .frame(height: 56)
+            .foregroundStyle(appState.isRecording ? .white : FW.accent)
+            .background(appState.isRecording ? FW.recording : Color(red: 1, green: 1, blue: 1))
+            .cornerRadius(20)
+            .overlay {
+                RoundedRectangle(cornerRadius: 20)
+                    .strokeBorder(appState.isRecording ? FW.recording : FW.accent, lineWidth: 2)
+            }
+            .buttonStyle(.plain)
 
             // shortcut hint
             if case .globe = appState.hotkey.kind {
@@ -105,7 +239,15 @@ struct RecordView: View {
             }
         }
         .padding(FW.spacing24)
-        .fwCard()
+        .background {
+            RoundedRectangle(cornerRadius: FW.radiusMedium)
+                .fill(FW.surfaceElevated.opacity(0.5))
+                .overlay {
+                    RoundedRectangle(cornerRadius: FW.radiusMedium)
+                        .strokeBorder(FW.accent.opacity(0.1), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.05), radius: 6, y: 3)
+        }
     }
 
     // MARK: - Context Bar
