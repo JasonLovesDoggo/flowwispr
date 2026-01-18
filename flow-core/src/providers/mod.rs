@@ -10,7 +10,9 @@ mod openrouter;
 mod streaming;
 mod transcription;
 
-pub use base10::Base10TranscriptionProvider;
+pub use base10::{
+    Base10TranscriptionProvider, CorrectionPair, CorrectionValidation, validate_corrections,
+};
 pub use completion::{CompletionProvider, CompletionRequest, CompletionResponse, TokenUsage};
 pub use gemini::{GeminiCompletionProvider, GeminiTranscriptionProvider};
 pub use local_whisper::{LocalWhisperTranscriptionProvider, WhisperModel};

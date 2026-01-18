@@ -1062,6 +1062,57 @@ pub extern "C" fn flow_delete_all_corrections(handle: *mut FlowHandle) -> usize 
     }
 }
 
+/// Validate corrections using AI (async, returns JSON)
+/// Input: JSON array of {"original": "...", "corrected": "..."} pairs
+/// Output: JSON array of {"original": "...", "corrected": "...", "valid": bool, "reason": "..."}
+/// Caller must free the returned string with flow_free_string
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_validate_corrections(
+    _handle: *mut FlowHandle,
+    corrections_json: *const c_char,
+) -> *mut c_char {
+    if corrections_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    let json_str = match unsafe { CStr::from_ptr(corrections_json) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    // Parse input JSON
+    let pairs: Vec<crate::providers::CorrectionPair> = match serde_json::from_str(json_str) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to parse corrections JSON: {}", e);
+            return ptr::null_mut();
+        }
+    };
+
+    // Run async validation
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            error!("Failed to create tokio runtime: {}", e);
+            return ptr::null_mut();
+        }
+    };
+
+    let results = match runtime.block_on(crate::providers::validate_corrections(pairs)) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Validation failed: {}", e);
+            return ptr::null_mut();
+        }
+    };
+
+    // Return as JSON
+    match CString::new(serde_json::to_string(&results).unwrap_or_default()) {
+        Ok(cstr) => cstr.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
 // ============ Stats ============
 
 /// Get total transcription time in minutes
@@ -1098,6 +1149,13 @@ pub extern "C" fn flow_free_string(s: *mut c_char) {
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_is_configured(handle: *mut FlowHandle) -> bool {
     let handle = unsafe { &*handle };
+
+    // Base10 ("Auto (Cloud)") handles both transcription and completion internally,
+    // so we don't need a separate completion provider configured
+    if handle.transcription.name() == "Auto (Cloud)" {
+        return handle.transcription.is_configured();
+    }
+
     handle.transcription.is_configured() && handle.completion.is_configured()
 }
 

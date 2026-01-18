@@ -182,14 +182,81 @@ final class EditLearningService {
             return
         }
 
-        // Valid edit detected
-        log("Valid edit detected (overlap: \(Int(overlap * 100))%)")
-        log("  Original: '\(original.prefix(50))...'")
-        log("  Edited:   '\(current.prefix(50))...'")
+        // Extract word-level corrections
+        let corrections = extractWordCorrections(original: original, edited: current)
 
+        if corrections.isEmpty {
+            log("No word-level corrections detected")
+            return
+        }
+
+        log("Detected \(corrections.count) potential correction(s)")
+        for (orig, corr) in corrections {
+            log("  '\(orig)' -> '\(corr)'")
+        }
+
+        // Validate corrections via AI
+        if let validations = engine.validateCorrections(corrections) {
+            let validCount = validations.filter { $0.valid }.count
+            log("AI validation: \(validCount)/\(validations.count) corrections valid")
+
+            for validation in validations {
+                if validation.valid {
+                    log("  ✓ '\(validation.original)' -> '\(validation.corrected)'")
+                } else {
+                    log("  ✗ '\(validation.original)' -> '\(validation.corrected)': \(validation.reason ?? "unknown")")
+                }
+            }
+
+            // Only proceed if we have at least one valid correction
+            if validCount == 0 {
+                log("No valid corrections, skipping learning")
+                return
+            }
+        } else {
+            log("AI validation unavailable, proceeding with heuristic check")
+        }
+
+        // Learn from edit (Rust will do its own Jaro-Winkler matching)
         if engine.learnFromEdit(original: original, edited: current) {
             log("Learned from edit successfully")
         }
+    }
+
+    /// Extract word-level corrections by comparing original and edited text
+    private func extractWordCorrections(original: String, edited: String) -> [(original: String, corrected: String)] {
+        let originalWords = original.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        let editedWords = edited.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+
+        var corrections: [(original: String, corrected: String)] = []
+
+        // Simple position-based comparison (similar to Rust's learn_from_edit)
+        let minLen = min(originalWords.count, editedWords.count)
+
+        for i in 0..<minLen {
+            let orig = originalWords[i].lowercased()
+            let edit = editedWords[i].lowercased()
+
+            // Skip if identical
+            if orig == edit { continue }
+
+            // Skip very short words
+            if orig.count < 2 || edit.count < 2 { continue }
+
+            // Skip if length difference is too large (probably not a typo fix)
+            if abs(orig.count - edit.count) > 2 { continue }
+
+            // Strip punctuation for comparison
+            let origClean = orig.trimmingCharacters(in: .punctuationCharacters)
+            let editClean = edit.trimmingCharacters(in: .punctuationCharacters)
+
+            // Skip if only punctuation differs
+            if origClean == editClean { continue }
+
+            corrections.append((original: origClean, corrected: editClean))
+        }
+
+        return corrections
     }
 
     private func cleanup() {

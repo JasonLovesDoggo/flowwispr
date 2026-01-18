@@ -15,10 +15,75 @@ use crate::error::{Error, Result};
 use super::{TranscriptionProvider, TranscriptionRequest, TranscriptionResponse};
 
 const BASE10_PROXY_URL: &str = "https://base10-proxy.test-j.workers.dev";
+const BASE10_VALIDATE_URL: &str = "https://base10-proxy.test-j.workers.dev/validate-corrections";
 
 /// Base10 transcription provider (with integrated completion)
 pub struct Base10TranscriptionProvider {
     client: Client,
+}
+
+/// A correction pair to validate
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectionPair {
+    pub original: String,
+    pub corrected: String,
+}
+
+/// Validation result for a correction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectionValidation {
+    pub original: String,
+    pub corrected: String,
+    pub valid: bool,
+    pub reason: Option<String>,
+}
+
+/// Request to validate corrections
+#[derive(Debug, Serialize)]
+struct ValidateCorrectionsRequest {
+    corrections: Vec<CorrectionPair>,
+}
+
+/// Response from validation endpoint
+#[derive(Debug, Deserialize)]
+struct ValidateCorrectionsResponse {
+    results: Vec<CorrectionValidation>,
+}
+
+/// Validate corrections using AI via the Base10 worker
+pub async fn validate_corrections(
+    corrections: Vec<CorrectionPair>,
+) -> Result<Vec<CorrectionValidation>> {
+    if corrections.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let client = Client::new();
+    let request = ValidateCorrectionsRequest { corrections };
+
+    debug!(
+        "Validating {} corrections via worker",
+        request.corrections.len()
+    );
+
+    let response = client
+        .post(BASE10_VALIDATE_URL)
+        .json(&request)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        error!("Validation worker error: {} - {}", status, error_text);
+        return Err(Error::Transcription(format!(
+            "Validation error: {} - {}",
+            status, error_text
+        )));
+    }
+
+    let validation_response: ValidateCorrectionsResponse = response.json().await?;
+    Ok(validation_response.results)
 }
 
 impl Base10TranscriptionProvider {

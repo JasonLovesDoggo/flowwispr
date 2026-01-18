@@ -210,10 +210,11 @@ async fn call_base10(
         .map_err(|_| worker::Error::RustError("Missing BASETEN_API_KEY".to_string()))?
         .to_string();
 
-    // Build prompt: always include "Hey Flow," plus any user-provided hints
+    // Build prompt: always include "Hey Flow, Flow" plus any user-provided hints
+    // Including "Flow" explicitly helps Whisper spell it correctly (not "Flo")
     let prompt = match user_prompt {
-        Some(extra) if !extra.is_empty() => format!("Hey Flow, {}", extra),
-        _ => "Hey Flow,".to_string(),
+        Some(extra) if !extra.is_empty() => format!("Hey Flow, Flow, {}", extra),
+        _ => "Hey Flow, Flow".to_string(),
     };
 
     let request = Base10Request {
@@ -446,6 +447,161 @@ async fn call_openrouter(
         .ok_or_else(|| worker::Error::RustError("No completion returned".to_string()))
 }
 
+// ============ Correction Validation Types ============
+
+#[derive(Debug, Deserialize)]
+struct ValidateCorrectionsRequest {
+    corrections: Vec<CorrectionPair>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CorrectionPair {
+    original: String,
+    corrected: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CorrectionValidation {
+    original: String,
+    corrected: String,
+    valid: bool,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidateCorrectionsResponse {
+    results: Vec<CorrectionValidation>,
+}
+
+fn build_validation_prompt() -> String {
+    String::from(
+        "You are a typo correction validator. You will receive pairs of words: an original (transcribed) \
+         word and a proposed correction. Determine if the correction is a valid fix for a speech-to-text typo.\n\n\
+         Valid corrections:\n\
+         - Fixing common transcription errors (teh → the, recieve → receive)\n\
+         - Fixing homophones chosen incorrectly (their → there, your → you're)\n\
+         - Fixing phonetically similar words (definately → definitely)\n\n\
+         Invalid corrections:\n\
+         - Changing to a completely different word (cat → dog)\n\
+         - Style preferences that aren't typos (awesome → cool)\n\
+         - Proper nouns being \"corrected\" to common words\n\
+         - Both words are valid and not similar (different meanings)\n\n\
+         For each pair, respond with a JSON array where each item has:\n\
+         - \"valid\": true/false\n\
+         - \"reason\": brief explanation if invalid\n\n\
+         Respond ONLY with the JSON array, no other text.",
+    )
+}
+
+async fn validate_corrections(
+    env: &Env,
+    corrections: Vec<CorrectionPair>,
+) -> Result<Vec<CorrectionValidation>> {
+    if corrections.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let api_key = env
+        .var("OPENROUTER_API_KEY")
+        .map_err(|_| worker::Error::RustError("Missing OPENROUTER_API_KEY".to_string()))?
+        .to_string();
+
+    // Build user message with correction pairs
+    let pairs_json = serde_json::to_string(&corrections)
+        .map_err(|e| worker::Error::RustError(format!("JSON error: {}", e)))?;
+
+    let request = OpenRouterRequest {
+        models: vec![
+            "meta-llama/llama-4-maverick:nitro".to_string(),
+            "openai/gpt-oss-120b:nitro".to_string(),
+        ],
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: build_validation_prompt(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: format!("Validate these corrections:\n{}", pairs_json),
+            },
+        ],
+        max_tokens: 500,
+        temperature: 0.1,
+        provider: ProviderConfig {
+            allow_fallbacks: true,
+            sort: SortConfig {
+                by: "throughput".to_string(),
+                partition: "none".to_string(),
+            },
+        },
+    };
+
+    let body = serde_json::to_vec(&request)
+        .map_err(|e| worker::Error::RustError(format!("JSON serialize error: {}", e)))?;
+
+    let headers = Headers::new();
+    headers.set("Authorization", &format!("Bearer {}", api_key))?;
+    headers.set("Content-Type", "application/json")?;
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    init.with_body(Some(body.into()));
+    init.with_headers(headers);
+
+    let upstream = Request::new_with_init(OPENROUTER_API_URL, &init)?;
+    let mut response = Fetch::Request(upstream).send().await?;
+
+    if !response.status_code().to_string().starts_with('2') {
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(worker::Error::RustError(format!(
+            "OpenRouter error {}: {}",
+            response.status_code(),
+            error_text
+        )));
+    }
+
+    let response_text = response.text().await?;
+    let openrouter_response: OpenRouterResponse = serde_json::from_str(&response_text)
+        .map_err(|e| worker::Error::RustError(format!("JSON parse error: {}", e)))?;
+
+    let content = openrouter_response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.clone())
+        .ok_or_else(|| worker::Error::RustError("No completion returned".to_string()))?;
+
+    // Parse the AI's response
+    #[derive(Debug, Deserialize)]
+    struct AIValidation {
+        valid: bool,
+        #[serde(default)]
+        reason: Option<String>,
+    }
+
+    let ai_results: Vec<AIValidation> = serde_json::from_str(&content).unwrap_or_else(|_| {
+        // If parsing fails, assume all are valid (fail open)
+        corrections
+            .iter()
+            .map(|_| AIValidation {
+                valid: true,
+                reason: None,
+            })
+            .collect()
+    });
+
+    // Zip with original corrections
+    Ok(corrections
+        .into_iter()
+        .zip(ai_results.into_iter())
+        .map(|(pair, ai)| CorrectionValidation {
+            original: pair.original,
+            corrected: pair.corrected,
+            valid: ai.valid,
+            reason: ai.reason,
+        })
+        .collect())
+}
+
 // ============ Main Handler ============
 
 #[event(fetch)]
@@ -454,6 +610,29 @@ pub async fn main(mut req: Request, env: Env, _ctx: worker::Context) -> Result<R
         return Response::error("Method Not Allowed", 405);
     }
 
+    let path = req.path();
+
+    // Route: /validate-corrections
+    if path == "/validate-corrections" {
+        let body_bytes = req.bytes().await?;
+        let request: ValidateCorrectionsRequest = match serde_json::from_slice(&body_bytes) {
+            Ok(r) => r,
+            Err(e) => return Response::error(format!("Invalid JSON: {}", e), 400),
+        };
+
+        let results = validate_corrections(&env, request.corrections).await?;
+
+        let response = ValidateCorrectionsResponse { results };
+        let json = serde_json::to_string(&response)
+            .map_err(|e| worker::Error::RustError(format!("JSON error: {}", e)))?;
+
+        let headers = Headers::new();
+        headers.set("Content-Type", "application/json")?;
+
+        return Ok(Response::ok(json)?.with_headers(headers));
+    }
+
+    // Route: / (default - transcription + completion)
     let body_bytes = req.bytes().await?;
     let request: CombinedRequest = match serde_json::from_slice(&body_bytes) {
         Ok(r) => r,

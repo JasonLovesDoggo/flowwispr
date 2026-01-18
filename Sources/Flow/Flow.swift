@@ -149,6 +149,14 @@ public struct Correction: Identifiable, Sendable {
     public let updatedAt: Date
 }
 
+/// Validation result for a correction pair
+public struct CorrectionValidation: Sendable {
+    public let original: String
+    public let corrected: String
+    public let valid: Bool
+    public let reason: String?
+}
+
 /// Main interface to the Flow engine
 public final class Flow: @unchecked Sendable {
     private let handle: OpaquePointer?
@@ -418,6 +426,53 @@ public final class Flow: @unchecked Sendable {
     public func deleteAllCorrections() -> Int {
         guard let handle = handle else { return 0 }
         return flow_delete_all_corrections(handle)
+    }
+
+    /// Validate corrections using AI before learning
+    /// - Parameter corrections: Array of (original, corrected) pairs to validate
+    /// - Returns: Array of validation results, or nil on error
+    public func validateCorrections(_ corrections: [(original: String, corrected: String)]) -> [CorrectionValidation]? {
+        guard let handle = handle else { return nil }
+
+        // Build JSON array
+        let jsonArray: [[String: String]] = corrections.map { pair in
+            ["original": pair.original, "corrected": pair.corrected]
+        }
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: jsonArray),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return nil
+        }
+
+        let cResult = jsonString.withCString { cJson in
+            flow_validate_corrections(handle, cJson)
+        }
+
+        guard let cString = cResult else { return nil }
+        let resultString = String(cString: cString)
+        flow_free_string(cString)
+
+        guard let resultData = resultString.data(using: .utf8) else { return nil }
+
+        struct RawValidation: Decodable {
+            let original: String
+            let corrected: String
+            let valid: Bool
+            let reason: String?
+        }
+
+        guard let rawResults = try? JSONDecoder().decode([RawValidation].self, from: resultData) else {
+            return nil
+        }
+
+        return rawResults.map { raw in
+            CorrectionValidation(
+                original: raw.original,
+                corrected: raw.corrected,
+                valid: raw.valid,
+                reason: raw.reason
+            )
+        }
     }
 
     // MARK: - Stats

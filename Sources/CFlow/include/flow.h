@@ -136,6 +136,12 @@ bool flow_delete_correction(FlowHandle* handle, const char* id);
 /// @return Number of corrections deleted
 size_t flow_delete_all_corrections(FlowHandle* handle);
 
+/// Validate corrections using AI
+/// @param handle Engine handle
+/// @param corrections_json JSON array of {"original": "...", "corrected": "..."} pairs
+/// @return JSON array of {"original": "...", "corrected": "...", "valid": bool, "reason": "..."} (caller must free with flow_free_string), or NULL on error
+char* flow_validate_corrections(FlowHandle* handle, const char* corrections_json);
+
 // ============ Stats ============
 
 /// Get total transcription time in minutes
