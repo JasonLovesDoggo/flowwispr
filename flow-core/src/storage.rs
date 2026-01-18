@@ -174,15 +174,29 @@ impl Storage {
 
         if count == 0 {
             let now = Utc::now().to_rfc3339();
-            // Common transcription error: "u of t hacks" -> "UofTHacks"
-            conn.execute(
-                r#"
-                INSERT OR IGNORE INTO corrections (id, original, corrected, occurrences, confidence, source, created_at, updated_at)
-                VALUES (?1, 'u of t hacks', 'UofTHacks', 3, 0.75, 'Seeded', ?2, ?2)
-                "#,
-                params![Uuid::new_v4().to_string(), now],
-            )?;
-            debug!("Seeded default corrections");
+
+            // Seed common transcription corrections
+            let seeds = [
+                ("u of t hacks", "UofTHacks"),
+                ("get hub", "GitHub"),
+                ("anthropic", "Anthropic"),
+                ("open ai", "OpenAI"),
+                ("chat gpt", "ChatGPT"),
+                ("gonna", "going to"),
+                ("wanna", "want to"),
+                ("kinda", "kind of"),
+            ];
+
+            for (original, corrected) in seeds {
+                conn.execute(
+                    r#"
+                    INSERT OR IGNORE INTO corrections (id, original, corrected, occurrences, confidence, source, created_at, updated_at)
+                    VALUES (?1, ?2, ?3, 3, 0.75, 'Seeded', ?4, ?4)
+                    "#,
+                    params![Uuid::new_v4().to_string(), original, corrected, now],
+                )?;
+            }
+            debug!("Seeded {} default corrections", seeds.len());
         }
 
         info!("Database schema initialized");

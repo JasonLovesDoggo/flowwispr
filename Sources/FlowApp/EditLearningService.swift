@@ -24,10 +24,10 @@ final class EditLearningService {
     private let pollInterval: TimeInterval = 1.0
 
     /// How long text must be unchanged before we consider it "stable" (seconds)
-    private let stabilityThreshold: TimeInterval = 5.0
+    private let stabilityThreshold: TimeInterval = 2.0
 
     /// Maximum time to monitor before giving up (seconds)
-    private let maxMonitoringDuration: TimeInterval = 30.0
+    private let maxMonitoringDuration: TimeInterval = 15.0
 
     /// Minimum text length to bother learning from
     private let minimumTextLength = 10
@@ -120,15 +120,26 @@ final class EditLearningService {
         // Check if we've exceeded max monitoring time
         let elapsed = Date().timeIntervalSince(startTime)
         if elapsed > maxMonitoringDuration {
-            log("Monitoring timeout after \(Int(elapsed))s, giving up")
+            log("Monitoring timeout after \(Int(elapsed))s")
+            // Try to learn from whatever we have
+            if let lastText = lastReadText, lastText != original {
+                log("Using last captured text as final edit")
+                checkAndLearn(original: original, current: lastText)
+            }
             cancelMonitoring()
             return
         }
 
         // Try to read the focused text element
         guard let (currentText, role) = readFocusedTextElement(pid: pid) else {
-            // Can't read, might have switched apps, give up
-            log("Lost focus on text element, stopping")
+            // Lost focus - treat this as "done editing" signal
+            // Use the last text we captured as the final edit
+            if let lastText = lastReadText, lastText != original {
+                log("Lost focus, treating last text as final edit")
+                checkAndLearn(original: original, current: lastText)
+            } else {
+                log("Lost focus on text element, no edits detected")
+            }
             cancelMonitoring()
             return
         }
