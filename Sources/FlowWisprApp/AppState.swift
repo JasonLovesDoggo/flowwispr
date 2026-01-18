@@ -523,6 +523,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    func setOpenRouterApiKey(_ key: String) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if engine.setOpenRouterApiKey(trimmed) {
+            // Also switch to OpenRouter provider
+            _ = engine.setCompletionProvider(.openRouter, apiKey: trimmed)
+            isConfigured = engine.isConfigured
+            errorMessage = nil
+            Analytics.shared.track("OpenRouter API Key Set")
+        } else {
+            isConfigured = engine.isConfigured
+            errorMessage = engine.lastError ?? "Failed to set OpenRouter API key"
+        }
+    }
+
     func setProvider(_ provider: CompletionProvider, apiKey: String) {
         if engine.setCompletionProvider(provider, apiKey: apiKey) {
             isConfigured = engine.isConfigured
