@@ -1,6 +1,7 @@
 //! Base10 provider for Whisper transcription
 //!
 //! Base10 is a transcription-only provider (no completion support).
+//! Requests are proxied through a Cloudflare Worker that handles authentication.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -13,28 +14,19 @@ use crate::error::{Error, Result};
 
 use super::{TranscriptionProvider, TranscriptionRequest, TranscriptionResponse};
 
-const BASE10_API_URL: &str =
-    "https://model-232nj723.api.baseten.co/environments/production/predict";
+const BASE10_PROXY_URL: &str = "https://base10-proxy.test-j.workers.dev";
 
 /// Base10 Whisper transcription provider
 pub struct Base10TranscriptionProvider {
     client: Client,
-    api_key: Option<String>,
 }
 
 impl Base10TranscriptionProvider {
-    /// Create a new provider with the given API key
-    pub fn new(api_key: Option<String>) -> Self {
+    /// Create a new provider (API key handled by proxy)
+    pub fn new(_api_key: Option<String>) -> Self {
         Self {
             client: Client::new(),
-            api_key,
         }
-    }
-
-    fn api_key(&self) -> Result<&str> {
-        self.api_key
-            .as_deref()
-            .ok_or_else(|| Error::ProviderNotConfigured("Base10 API key not set".to_string()))
     }
 }
 
@@ -86,8 +78,6 @@ impl TranscriptionProvider for Base10TranscriptionProvider {
     }
 
     async fn transcribe(&self, request: TranscriptionRequest) -> Result<TranscriptionResponse> {
-        let api_key = self.api_key()?;
-
         // Convert PCM to WAV format and base64 encode
         let wav_data = pcm_to_wav(&request.audio, request.sample_rate, 1);
         let audio_base64 = STANDARD.encode(&wav_data);
@@ -105,13 +95,11 @@ impl TranscriptionProvider for Base10TranscriptionProvider {
             },
         };
 
-        debug!("Sending transcription request to Base10");
+        debug!("Sending transcription request to Base10 proxy");
 
         let response = self
             .client
-            .post(BASE10_API_URL)
-            .header("Authorization", format!("Api-Key {}", api_key))
-            .header("Content-Type", "application/json")
+            .post(BASE10_PROXY_URL)
             .json(&base10_request)
             .send()
             .await?;
@@ -159,7 +147,7 @@ impl TranscriptionProvider for Base10TranscriptionProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.api_key.is_some()
+        true // proxy handles authentication
     }
 }
 
@@ -217,14 +205,9 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_not_configured() {
+    fn test_provider_always_configured() {
+        // proxy handles auth, so always configured
         let provider = Base10TranscriptionProvider::new(None);
-        assert!(!provider.is_configured());
-    }
-
-    #[test]
-    fn test_provider_configured() {
-        let provider = Base10TranscriptionProvider::new(Some("test-key".to_string()));
         assert!(provider.is_configured());
     }
 }
