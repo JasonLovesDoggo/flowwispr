@@ -44,32 +44,32 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: flowwispr-core
+          workspaces: flow-core
 
       - name: Build Rust library for Apple Silicon (aarch64)
         run: |
-          cd flowwispr-core
+          cd flow-core
           cargo build --release --target aarch64-apple-darwin
-          ls -lh target/aarch64-apple-darwin/release/libflowwispr_core.a
+          ls -lh target/aarch64-apple-darwin/release/libflow_core.a
 
       - name: Build Rust library for Intel (x86_64)
         run: |
-          cd flowwispr-core
+          cd flow-core
           cargo build --release --target x86_64-apple-darwin
-          ls -lh target/x86_64-apple-darwin/release/libflowwispr_core.a
+          ls -lh target/x86_64-apple-darwin/release/libflow_core.a
 
       - name: Create universal Rust library
         run: |
-          cd flowwispr-core
+          cd flow-core
           mkdir -p target/release
           lipo -create \
-            target/aarch64-apple-darwin/release/libflowwispr_core.a \
-            target/x86_64-apple-darwin/release/libflowwispr_core.a \
-            -output target/release/libflowwispr_core.a
+            target/aarch64-apple-darwin/release/libflow_core.a \
+            target/x86_64-apple-darwin/release/libflow_core.a \
+            -output target/release/libflow_core.a
 
           echo "Universal library created:"
-          lipo -info target/release/libflowwispr_core.a
-          ls -lh target/release/libflowwispr_core.a
+          lipo -info target/release/libflow_core.a
+          ls -lh target/release/libflow_core.a
 
       - name: Build Swift universal binary
         run: |
@@ -80,7 +80,7 @@ jobs:
 
       - name: Verify universal binary
         run: |
-          lipo -info .build/apple/Products/Release/FlowWisprApp
+          lipo -info .build/apple/Products/Release/Flow
 
       - name: Create .app bundle structure
         env:
@@ -88,14 +88,14 @@ jobs:
         run: |
           APP_NAME="Flow"
           APP_BUNDLE="${APP_NAME}.app"
-          BUNDLE_ID="com.flowwispr.flow"
+          BUNDLE_ID="com.flow.flow"
 
           # Create bundle directories
           mkdir -p "${APP_BUNDLE}/Contents/MacOS"
           mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
           # Copy executable
-          cp .build/apple/Products/Release/FlowWisprApp "${APP_BUNDLE}/Contents/MacOS/Flow"
+          cp .build/apple/Products/Release/Flow "${APP_BUNDLE}/Contents/MacOS/Flow"
           chmod +x "${APP_BUNDLE}/Contents/MacOS/Flow"
 
           # Copy resources

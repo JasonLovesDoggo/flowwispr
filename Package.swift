@@ -5,8 +5,8 @@ import Foundation
 import PackageDescription
 
 let packageRoot = URL(fileURLWithPath: #file).deletingLastPathComponent().path
-let debugLibPath = "\(packageRoot)/flowwispr-core/target/debug/libflowwispr_core.a"
-let releaseLibPath = "\(packageRoot)/flowwispr-core/target/release/libflowwispr_core.a"
+let debugLibPath = "\(packageRoot)/flow-core/target/debug/libflow_core.a"
+let releaseLibPath = "\(packageRoot)/flow-core/target/release/libflow_core.a"
 let buildConfiguration = (ProcessInfo.processInfo.environment["SWIFT_BUILD_CONFIGURATION"]
     ?? ProcessInfo.processInfo.environment["CONFIGURATION"])?.lowercased()
 let preferRelease = buildConfiguration == "release"
@@ -25,18 +25,18 @@ let rustLibPath: String = {
 }()
 
 let package = Package(
-    name: "FlowWispr",
+    name: "Flow",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .library(
-            name: "FlowWispr",
-            targets: ["FlowWispr"]
+            name: "Flow",
+            targets: ["Flow"]
         ),
         .executable(
-            name: "FlowWisprApp",
-            targets: ["FlowWisprApp"]
+            name: "Flow",
+            targets: ["FlowApp"]
         ),
     ],
     dependencies: [
@@ -45,7 +45,7 @@ let package = Package(
     targets: [
         // C wrapper for the Rust FFI
         .target(
-            name: "CFlowWispr",
+            name: "CFlow",
             path: "Sources/CFlowWispr",
             publicHeadersPath: "include",
             linkerSettings: [
@@ -66,15 +66,15 @@ let package = Package(
         ),
         // Swift wrapper
         .target(
-            name: "FlowWispr",
-            dependencies: ["CFlowWispr"],
+            name: "Flow",
+            dependencies: ["CFlow"],
             path: "Sources/FlowWispr"
         ),
         // macOS App
         .executableTarget(
-            name: "FlowWisprApp",
+            name: "FlowApp",
             dependencies: [
-                "FlowWispr",
+                "Flow",
                 .product(name: "Amplitude", package: "Amplitude-iOS"),
             ],
             path: "Sources/FlowWisprApp",

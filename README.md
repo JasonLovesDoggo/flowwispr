@@ -32,8 +32,8 @@ See the [Setup](#setup) section below for instructions on building from source.
 
 ## Tech stack
 
-- Rust core engine in `flowwispr-core/`
-- FFI bridge for native app integration (C ABI in `flowwispr-core/src/ffi.rs`)
+- Rust core engine in `flow-core/`
+- FFI bridge for native app integration (C ABI in `flow-core/src/ffi.rs`)
 - Provider abstraction for transcription and completion
 - SQLite-backed storage for user data and stats
 
@@ -44,7 +44,7 @@ The rest of the app lives here in the repo root.
 ```sh
 git clone https://github.com/JasonLovesDoggo/flow.git
 cd flow
-cd flowwispr-core
+cd flow-core
 cargo build
 cd ..
 swift run
