@@ -5,10 +5,12 @@
 // Main navigation container with sidebar navigation for Record, Shortcuts, Settings.
 //
 
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @State private var hoveredTab: AppTab?
 
     var body: some View {
         ZStack {
@@ -17,10 +19,14 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Logo
                     HStack(spacing: 8) {
-                        Image(systemName: "waveform")
-                            .font(.title2)
-                            .foregroundStyle(FW.accentGradient)
-                        
+                        if let iconURL = Bundle.module.url(forResource: "app-icon-old", withExtension: "png"),
+                           let nsImage = NSImage(contentsOf: iconURL) {
+                            Image(nsImage: nsImage)
+                                .resizable()
+                                .frame(width: 24, height: 24)
+                                .cornerRadius(5)
+                        }
+
                         Text("Flow")
                             .font(.title2.weight(.semibold))
                     }
@@ -105,14 +111,19 @@ struct ContentView: View {
                 Spacer()
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 10)
-        .background(
-            appState.selectedTab == tab ?
-            RoundedRectangle(cornerRadius: 8)
-                .fill(FW.accentGradient.opacity(0.1))
-            : nil
-        )
+        .background {
+            if appState.selectedTab == tab {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(FW.accentGradient.opacity(0.1))
+            } else if hoveredTab == tab {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(FW.surfaceElevated.opacity(0.6))
+            }
+        }
+        .contentShape(Rectangle())
         .if(appState.selectedTab == tab) { view in
             view.foregroundStyle(FW.accentGradient)
         }
@@ -120,6 +131,16 @@ struct ContentView: View {
             view.foregroundStyle(FW.textSecondary)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+            withAnimation(.easeOut(duration: 0.12)) {
+                hoveredTab = hovering ? tab : nil
+            }
+        }
     }
 
     private var statusIndicator: some View {

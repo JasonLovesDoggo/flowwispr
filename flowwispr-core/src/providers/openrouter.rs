@@ -17,7 +17,7 @@ const OPENROUTER_API_BASE: &str = "https://openrouter.ai/api/v1";
 pub struct OpenRouterCompletionProvider {
     client: Client,
     api_key: Option<String>,
-    model: String,
+    models: Vec<String>,
 }
 
 impl OpenRouterCompletionProvider {
@@ -28,13 +28,22 @@ impl OpenRouterCompletionProvider {
         Self {
             client: Client::new(),
             api_key: key,
-            model: "meta-llama/llama-4-maverick:nitro".to_string(),
+            models: vec![
+                "meta-llama/llama-4-maverick:nitro".to_string(),
+                "openai/gpt-oss-120b:nitro".to_string(),
+            ],
         }
     }
 
-    /// Set the model to use
+    /// Set the models to use (with fallbacks)
+    pub fn with_models(mut self, models: Vec<String>) -> Self {
+        self.models = models;
+        self
+    }
+
+    /// Set a single model to use
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
+        self.models = vec![model.into()];
         self
     }
 
@@ -67,11 +76,27 @@ impl OpenRouterCompletionProvider {
 
 #[derive(Debug, Serialize)]
 struct ChatRequest {
-    model: String,
+    models: Vec<String>,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_fallbacks: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sort: Option<SortConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct SortConfig {
+    by: String,
+    partition: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +148,7 @@ impl CompletionProvider for OpenRouterCompletionProvider {
         }
 
         let chat_request = ChatRequest {
-            model: self.model.clone(),
+            models: self.models.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -136,11 +161,18 @@ impl CompletionProvider for OpenRouterCompletionProvider {
             ],
             max_tokens: Some(1000),
             temperature: 0.3,
+            provider: Some(ProviderConfig {
+                allow_fallbacks: Some(true),
+                sort: Some(SortConfig {
+                    by: "throughput".to_string(),
+                    partition: "none".to_string(),
+                }),
+            }),
         };
 
         debug!(
-            "Sending completion request to OpenRouter with model: {}",
-            self.model
+            "Sending completion request to OpenRouter with models: {:?}",
+            self.models
         );
 
         let response = self

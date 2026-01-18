@@ -1,8 +1,8 @@
 //
 // AppState.swift
-// FlowWispr
+// Flow
 //
-// Observable state for the FlowWispr app.
+// Observable state for the Flow app.
 //
 
 import AppKit
@@ -14,8 +14,13 @@ import Foundation
 /// Main app state observable
 @MainActor
 final class AppState: ObservableObject {
-    /// The FlowWispr engine
+    /// The Flow engine
     let engine: FlowWispr
+
+    private func log(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        print("[\(timestamp)] \(message)")
+    }
 
     /// Current recording state
     @Published var isRecording = false
@@ -30,13 +35,13 @@ final class AppState: ObservableObject {
     /// Current writing mode
     @Published var currentMode: WritingMode = .casual
 
-    /// Current app name (tracks frontmost app, including FlowWispr itself)
+    /// Current app name (tracks frontmost app, including Flow itself)
     @Published var currentApp: String = "Unknown"
 
     /// Current app category
     @Published var currentCategory: AppCategory = .unknown
 
-    /// Target app for mode configuration (the app before FlowWispr became active)
+    /// Target app for mode configuration (the app before Flow became active)
     @Published var targetAppName: String = "Unknown"
     @Published var targetAppBundleId: String?
     @Published var targetAppMode: WritingMode = .casual
@@ -130,7 +135,7 @@ final class AppState: ObservableObject {
     }
 
     private func handleHotkeyTrigger(_ trigger: GlobeKeyHandler.Trigger) {
-        print("🎹 [HOTKEY] Trigger detected: \(trigger)")
+        log("🎹 [HOTKEY] Trigger detected: \(trigger)")
         switch trigger {
         case .pressed:
             if !isRecording {
@@ -378,7 +383,7 @@ final class AppState: ObservableObject {
                 targetAppMode = suggestedMode
             }
         } else {
-            // FlowWispr became active - preserve the target app for mode changes
+            // Flow became active - preserve the target app for mode changes
             // Update currentMode to reflect the target app's mode
             currentMode = targetAppMode
             currentCategory = targetAppCategory
@@ -427,14 +432,14 @@ final class AppState: ObservableObject {
         }
 
         targetApplication = NSWorkspace.shared.frontmostApplication
-        print("🎤 [RECORDING] Starting recording - App: \(currentApp), Mode: \(currentMode.displayName)")
+        log("🎤 [RECORDING] Starting recording - App: \(currentApp), Mode: \(currentMode.displayName)")
         pauseMediaPlayback()
         if engine.startRecording() {
             isRecording = true
             isProcessing = false
             updateRecordingIndicatorVisibility()
             recordingDuration = 0
-            print("✅ [RECORDING] Recording started successfully")
+            log("✅ [RECORDING] Recording started successfully")
 
             Analytics.shared.track("Recording Started", eventProperties: [
                 "app_name": currentApp,
@@ -467,19 +472,20 @@ final class AppState: ObservableObject {
     }
 
     func stopRecording() {
-        print("⏹️ [RECORDING] Stopping recording - Duration: \(recordingDuration)ms")
+        log("⏹️ [RECORDING] Stopping recording - Duration: \(recordingDuration)ms")
         recordingTimer?.invalidate()
         recordingTimer = nil
         audioLevelTimer?.invalidate()
         audioLevelTimer = nil
         audioLevel = 0.0
+        smoothedAudioLevel = 0.0
 
         let duration = engine.stopRecording()
         isRecording = false
         resumeMediaPlayback()
 
         if duration > 0 {
-            print("✅ [RECORDING] Recording stopped successfully - Duration: \(duration)ms")
+            log("✅ [RECORDING] Recording stopped successfully - Duration: \(duration)ms")
             Analytics.shared.track("Recording Stopped", eventProperties: [
                 "duration_ms": recordingDuration,
                 "app_name": currentApp
@@ -487,7 +493,7 @@ final class AppState: ObservableObject {
             setProcessing(true)
             transcribe()
         } else {
-            print("⚠️ [RECORDING] Recording cancelled (too short)")
+            log("⚠️ [RECORDING] Recording cancelled (too short)")
             Analytics.shared.track("Recording Cancelled", eventProperties: [
                 "duration_ms": recordingDuration,
                 "app_name": currentApp
@@ -502,7 +508,7 @@ final class AppState: ObservableObject {
         let mode = currentMode
         let duration = recordingDuration
 
-        print("🔄 [TRANSCRIBE] Starting transcription - App: \(appName), Mode: \(mode.displayName)")
+        log("🔄 [TRANSCRIBE] Starting transcription - App: \(appName), Mode: \(mode.displayName)")
 
         Task.detached { [weak self] in
             guard let self else { return }
@@ -513,13 +519,13 @@ final class AppState: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 if let text = result {
-                    print("✅ [TRANSCRIBE] Transcription completed - Length: \(text.count) chars")
-                    print("📝 [TRANSCRIBE] Result: \(text.prefix(100))...")
+                    self.log("✅ [TRANSCRIBE] Transcription completed - Length: \(text.count) chars")
+                    self.log("📝 [TRANSCRIBE] Result: \(text.prefix(100))...")
                     self.lastTranscription = text
                     self.errorMessage = nil
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
-                    print("📋 [CLIPBOARD] Text copied to clipboard")
+                    self.log("📋 [CLIPBOARD] Text copied to clipboard")
 
                     Analytics.shared.track("Transcription Completed", eventProperties: [
                         "app_name": appName,
@@ -537,7 +543,7 @@ final class AppState: ObservableObject {
                     self.refreshHistory()
                 } else {
                     let errorMsg = self.engine.lastError ?? "Transcription failed"
-                    print("❌ [TRANSCRIBE] Transcription failed: \(errorMsg)")
+                    self.log("❌ [TRANSCRIBE] Transcription failed: \(errorMsg)")
                     self.errorMessage = errorMsg
 
                     Analytics.shared.track("Transcription Failed", eventProperties: [
@@ -603,7 +609,7 @@ final class AppState: ObservableObject {
     }
 
     private func pasteText() {
-        print("📌 [PASTE] Sending paste command (Cmd+V) to app: \(targetApplication?.localizedName ?? "Unknown")")
+        log("📌 [PASTE] Sending paste command (Cmd+V) to app: \(targetApplication?.localizedName ?? "Unknown")")
         let source = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
@@ -613,7 +619,7 @@ final class AppState: ObservableObject {
 
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
-        print("✅ [PASTE] Paste command sent successfully")
+        log("✅ [PASTE] Paste command sent successfully")
 
         Analytics.shared.track("Text Pasted", eventProperties: [
             "target_app": targetApplication?.localizedName ?? "Unknown",
@@ -727,6 +733,11 @@ final class AppState: ObservableObject {
 
     // MARK: - Stats
 
+    var todayTranscriptions: Int {
+        let calendar = Calendar.current
+        return history.filter { calendar.isDateInToday($0.createdAt) }.count
+    }
+
     var totalTranscriptions: Int {
         (engine.stats?["total_transcriptions"] as? Int) ?? 0
     }
@@ -734,6 +745,10 @@ final class AppState: ObservableObject {
     var totalMinutes: Int {
         let ms = (engine.stats?["total_duration_ms"] as? Int) ?? 0
         return ms / 60000
+    }
+
+    var totalWordsDictated: Int {
+        (engine.stats?["total_words_dictated"] as? Int) ?? 0
     }
 
     private struct MediaPauseState {

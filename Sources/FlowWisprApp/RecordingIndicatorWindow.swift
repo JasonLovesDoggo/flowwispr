@@ -34,14 +34,18 @@ final class RecordingIndicatorWindow {
     }
 
     func show() {
-        positionWindow()
         window.alphaValue = 0
+        positionWindow()
         window.orderFrontRegardless()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.35
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().alphaValue = 1
+        // Small delay to ensure layout is settled before animating
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+            guard let self else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.35
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.window.animator().alphaValue = 1
+            }
         }
     }
 
@@ -87,45 +91,35 @@ private struct RecordingIndicatorView: View {
 
     var body: some View {
         HStack(spacing: FW.spacing6) {
-            Circle()
-                .fill(appState.isRecording ? FW.recording : FW.accent)
-                .frame(width: 8, height: 8)
-                .opacity(pulse ? 0.6 : 1.0)
+            // Left side: Circle or Spinner (fixed 14x14 to prevent shifts)
+            ZStack {
+                // Show pulsing dot when recording or idle (always present to avoid disappearing)
+                Circle()
+                    .fill(appState.isRecording ? FW.recording : FW.accent)
+                    .frame(width: 8, height: 8)
+                    .opacity((appState.isProcessing && !appState.isRecording) ? 0 : (pulse ? 0.6 : 1.0))
+                    .animation(.linear(duration: 0.15), value: appState.isRecording) // Smooth color transition
 
-            if appState.isRecording {
-                CompactWaveformView(isRecording: true, audioLevel: appState.smoothedAudioLevel)
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
-            }
-
-            if appState.isProcessing && !appState.isInitializingModel {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-                    .tint(.white.opacity(0.9))
-                    .frame(width: 50, height: 14)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.5)).animation(.spring(response: 0.65, dampingFraction: 0.75).delay(0.35)),
-                        removal: .opacity.combined(with: .scale(scale: 0.8)).animation(.spring(response: 0.5, dampingFraction: 0.75))
-                    ))
-            }
-
-            if appState.isInitializingModel {
-                HStack(spacing: FW.spacing6) {
+                // Show spinner when processing (overlaid)
+                if appState.isProcessing && !appState.isRecording {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .controlSize(.small)
                         .tint(.white.opacity(0.9))
-
-                    Text("Initializing Whisper model...")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(1)
                 }
-                .frame(height: 14)
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .scale(scale: 0.5)).animation(.spring(response: 0.65, dampingFraction: 0.75).delay(0.35)),
-                    removal: .opacity.combined(with: .scale(scale: 0.8)).animation(.spring(response: 0.5, dampingFraction: 0.75))
-                ))
+            }
+            .frame(width: 14, height: 14)
+
+            // Right side: Waveform or text (fixed width to prevent shifts)
+            if appState.isInitializingModel {
+                Text("Initializing Whisper model...")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                    .frame(height: 14)
+            } else {
+                // Always show waveform, let it decay naturally
+                CompactWaveformView(isRecording: appState.isRecording, audioLevel: appState.smoothedAudioLevel)
             }
         }
         .padding(.horizontal, 10)
@@ -135,9 +129,6 @@ private struct RecordingIndicatorView: View {
                 .fill(Color.black.opacity(0.55))
         )
         .compositingGroup()
-        .animation(.spring(response: 0.85, dampingFraction: 0.82), value: appState.isRecording)
-        .animation(.spring(response: 0.85, dampingFraction: 0.82), value: appState.isProcessing)
-        .animation(.spring(response: 0.85, dampingFraction: 0.82), value: appState.isInitializingModel)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                 pulse = true

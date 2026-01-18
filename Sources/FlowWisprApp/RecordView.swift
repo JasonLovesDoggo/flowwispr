@@ -110,7 +110,7 @@ struct RecordView: View {
                         }
 
                     VStack(alignment: .leading, spacing: FW.spacing4) {
-                        Text("3")
+                        Text("\(appState.todayTranscriptions)")
                             .font(.title2.weight(.semibold))
                             .foregroundStyle(FW.textPrimary)
 
@@ -128,24 +128,24 @@ struct RecordView: View {
                     .fill(FW.surfaceElevated.opacity(0.5))
             }
 
-            // Success rate stat
+            // Words dictated stat
             VStack(alignment: .leading, spacing: FW.spacing8) {
                 HStack(spacing: FW.spacing8) {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: "textformat")
                         .font(.body)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(FW.accent)
                         .frame(width: 40, height: 40)
                         .background {
                             Circle()
-                                .fill(Color.green.opacity(0.15))
+                                .fill(FW.accent.opacity(0.15))
                         }
 
                     VStack(alignment: .leading, spacing: FW.spacing4) {
-                        Text("60%")
+                        Text("\(appState.totalWordsDictated)")
                             .font(.title2.weight(.semibold))
                             .foregroundStyle(FW.textPrimary)
 
-                        Text("Success rate")
+                        Text("Words dictated")
                             .font(.caption)
                             .foregroundStyle(FW.textSecondary)
                     }
@@ -172,11 +172,11 @@ struct RecordView: View {
                         }
 
                     VStack(alignment: .leading, spacing: FW.spacing4) {
-                        Text("5")
+                        Text("\(appState.totalMinutes)")
                             .font(.title2.weight(.semibold))
                             .foregroundStyle(FW.textPrimary)
 
-                        Text("Total")
+                        Text("Total minutes")
                             .font(.caption)
                             .foregroundStyle(FW.textSecondary)
                     }

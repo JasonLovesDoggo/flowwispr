@@ -770,6 +770,30 @@ impl Storage {
             conn.query_row("SELECT COUNT(*) FROM transcriptions", [], |row| row.get(0))?;
         Ok(count as u64)
     }
+
+    /// Get total word count from saved transcriptions
+    pub fn get_total_words_dictated(&self) -> Result<u64> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT raw_text, processed_text FROM transcriptions")?;
+        let rows = stmt.query_map([], |row| {
+            let raw_text: String = row.get(0)?;
+            let processed_text: String = row.get(1)?;
+            Ok((raw_text, processed_text))
+        })?;
+        let mut total = 0u64;
+
+        for row in rows {
+            let (raw_text, processed_text) = row?;
+            let text = if raw_text.trim().is_empty() {
+                processed_text
+            } else {
+                raw_text
+            };
+            total = total.saturating_add(text.split_whitespace().count() as u64);
+        }
+
+        Ok(total)
+    }
 }
 
 fn parse_app_category(s: &str) -> Option<AppCategory> {

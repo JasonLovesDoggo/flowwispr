@@ -283,9 +283,7 @@ impl UserStats {
     pub fn from_storage(storage: &Storage) -> Result<Self> {
         let transcription_count = storage.get_transcription_count()?;
         let total_duration_ms = storage.get_total_transcription_time_ms()?;
-
-        // estimate words from duration (rough: 150 wpm)
-        let total_words_dictated = (total_duration_ms / 1000 / 60) * 150;
+        let total_words_dictated = storage.get_total_words_dictated()?;
 
         Ok(Self {
             total_transcriptions: transcription_count,

@@ -12,8 +12,8 @@ struct WaveformView: View {
     let barCount: Int
     let audioLevel: Float?
 
-    @State private var animationPhase: CGFloat = 0
-    @State private var lastRealLevel: Float = 0.0
+    @State private var sampleBuffer: [Float] = []
+    @State private var isDecaying = false
 
     init(isRecording: Bool, barCount: Int = 32, audioLevel: Float? = nil) {
         self.isRecording = isRecording
@@ -22,7 +22,7 @@ struct WaveformView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30)) { timeline in
+        TimelineView(.animation(minimumInterval: 1/30)) { _ in
             Canvas { context, size in
                 let barWidth: CGFloat = 1.5
                 let gap: CGFloat = 2.5
@@ -31,52 +31,67 @@ struct WaveformView: View {
                 let maxHeight = size.height * 0.85
                 let minHeight = size.height * 0.15
 
-                let time = timeline.date.timeIntervalSinceReferenceDate
+                // Update sample buffer with new audio level or decay
+                if isRecording, let level = audioLevel {
+                    DispatchQueue.main.async {
+                        sampleBuffer.append(level)
+                        // Keep buffer size at barCount
+                        if sampleBuffer.count > barCount {
+                            sampleBuffer.removeFirst()
+                        }
+                    }
+                } else if isDecaying {
+                    // Decay samples toward zero with position-based rates (left decays faster than right)
+                    DispatchQueue.main.async {
+                        let allZero = sampleBuffer.allSatisfy { $0 < 0.01 }
+                        if allZero {
+                            isDecaying = false
+                            sampleBuffer = []
+                        } else {
+                            sampleBuffer = sampleBuffer.enumerated().map { index, value in
+                                // Newer samples (right side) decay slower
+                                let position = Float(index) / Float(sampleBuffer.count)
+                                let decayRate = 0.92 + position * 0.05 // 0.92 (left) to 0.97 (right)
+                                return value * decayRate
+                            }
+                        }
+                    }
+                }
+
+                // Fill buffer for display
+                let displaySamples: [Float]
+                if sampleBuffer.count < barCount {
+                    // If buffer isn't full yet, repeat the latest sample to fill space (immediate visual feedback)
+                    let fillValue = sampleBuffer.last ?? 0.0
+                    displaySamples = Array(repeating: fillValue, count: barCount - sampleBuffer.count) + sampleBuffer
+                } else {
+                    displaySamples = Array(sampleBuffer.suffix(barCount))
+                }
+
+                // Find max in current window for normalization
+                let windowMax = displaySamples.max() ?? 0.01
+                let normalizationFactor = max(0.3, windowMax) // Use at least 0.3 as baseline
+                let bufferFilling = sampleBuffer.count < barCount
 
                 for i in 0..<barCount {
                     let x = startX + CGFloat(i) * (barWidth + gap)
 
-                    // generate wave height based on position and time
-                    let basePhase = Double(i) / Double(barCount) * .pi * 2
-                    let timePhase = time * (isRecording ? 3.5 : 0.5)
+                    // Get sample for this bar and apply log scale normalization
+                    var sample = displaySamples[i]
 
-                    let wave1 = sin(basePhase + timePhase) * 0.35
-                    let wave2 = sin(basePhase * 2.3 + timePhase * 1.3) * 0.25
-                    let wave3 = sin(basePhase * 0.7 + timePhase * 0.7) * 0.2
-
-                    // Update last real level when we have valid audio data
-                    var currentLevel = lastRealLevel
-                    if let level = audioLevel, level > 0.01 {
-                        currentLevel = level
-                        if i == 0 {
-                            // Only update state once per frame (on first bar)
-                            DispatchQueue.main.async {
-                                lastRealLevel = level
-                            }
-                        }
-                    } else if i == 0 && lastRealLevel > 0.01 {
-                        // Gradually decay the last real level when no new data
-                        let decayedLevel = lastRealLevel * 0.92
-                        DispatchQueue.main.async {
-                            lastRealLevel = decayedLevel
-                        }
+                    // Add positional variation when buffer is filling for immediate visual feedback
+                    if bufferFilling && sample > 0.01 {
+                        let barPosition = Double(i) / Double(barCount - 1)
+                        let positionVariation = sin(barPosition * .pi) // Arc shape
+                        sample = sample * Float(0.5 + positionVariation * 0.5)
                     }
 
-                    var amplitude: Double
-                    if currentLevel > 0.01 {
-                        // Use real audio level (current or decaying) with wave modulation
-                        let levelAmplitude = Double(currentLevel) * 0.75 + 0.15
-                        let waveModulation = (wave1 + wave2 + wave3) * 0.3
-                        amplitude = levelAmplitude + waveModulation
-                    } else {
-                        // Only use fake animation when level has decayed to near zero
-                        amplitude = isRecording
-                            ? 0.5 + wave1 + wave2 + wave3
-                            : 0.35 + wave1 * 0.5 + wave2 * 0.4
-                    }
-                    amplitude = max(0.15, min(1.0, amplitude))
+                    let normalized = sample / normalizationFactor
+                    // Apply gentle log scale to compress dynamic range
+                    let amplitude = normalized > 0.01 ? log10(1 + normalized * 9) : 0.0
 
-                    let height = minHeight + (maxHeight - minHeight) * amplitude
+                    // Always show bars at minHeight, scale up with amplitude
+                    let height = minHeight + (maxHeight - minHeight) * CGFloat(amplitude)
                     let y = (size.height - height) / 2
 
                     let rect = CGRect(x: x, y: y, width: barWidth, height: height)
@@ -91,6 +106,15 @@ struct WaveformView: View {
 
                     context.fill(path, with: .color(color))
                 }
+            }
+        }
+        .onChange(of: isRecording) { oldValue, newValue in
+            if oldValue && !newValue {
+                // Start decay animation when recording stops
+                isDecaying = true
+            } else if newValue {
+                // Clear decay state when recording starts
+                isDecaying = false
             }
         }
     }

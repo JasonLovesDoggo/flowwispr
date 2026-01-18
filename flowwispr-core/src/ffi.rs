@@ -36,6 +36,16 @@ use crate::storage::{
 };
 use crate::types::{Shortcut, Transcription, TranscriptionHistoryEntry, TranscriptionStatus};
 
+/// Log with timestamp
+macro_rules! log_with_time {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let now = chrono::Local::now();
+        println!("[{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), format!($($arg)*));
+        let _ = std::io::stdout().flush();
+    }};
+}
+
 /// Opaque handle to the FlowWhispr engine
 pub struct FlowWhisprHandle {
     runtime: Runtime,
@@ -237,6 +247,45 @@ pub extern "C" fn flowwispr_init(db_path: *const c_char) -> *mut FlowWhisprHandl
     };
 
     load_persisted_configuration(&mut handle);
+
+    // Load transcription mode (local vs remote Whisper)
+    let use_local = handle.storage.get_setting(SETTING_USE_LOCAL_TRANSCRIPTION)
+        .ok()
+        .flatten()
+        .map(|s| s == "true")
+        .unwrap_or(false);
+
+    if use_local {
+        log_with_time!("🔧 [INIT] Loading local Whisper transcription from database");
+        let model_str = handle.storage.get_setting(SETTING_LOCAL_WHISPER_MODEL)
+            .ok()
+            .flatten();
+        let model = WhisperModel::all()
+            .iter()
+            .find(|m| {
+                let (id, _) = m.model_id();
+                Some(id) == model_str.as_deref()
+            })
+            .copied()
+            .unwrap_or(WhisperModel::Quality);
+
+        // Get models directory
+        match crate::whisper_models::get_models_dir() {
+            Ok(models_dir) => {
+                handle.transcription = Arc::new(LocalWhisperTranscriptionProvider::new(
+                    model,
+                    models_dir
+                ));
+                log_with_time!("✅ [INIT] Using local Whisper model: {:?}", model);
+            }
+            Err(e) => {
+                error!("Failed to get models directory: {}", e);
+                log_with_time!("⚠️ [INIT] Failed to load local Whisper, falling back to remote: {}", e);
+            }
+        }
+    } else {
+        log_with_time!("☁️ [INIT] Using remote transcription (OpenAI Whisper API)");
+    }
 
     debug!("FlowWhispr engine initialized");
 
@@ -444,12 +493,16 @@ fn transcribe_with_audio(
     let completion_provider = Arc::clone(&handle.completion);
     let app_context = handle.app_tracker.current_app();
 
-    eprintln!("🎧 [RUST/TRANSCRIBE] Starting speech-to-text transcription");
+    let provider_name = std::any::type_name_of_val(&*transcription_provider);
+    log_with_time!(
+        "🎧 [RUST/TRANSCRIBE] Starting speech-to-text transcription (provider: {})",
+        provider_name
+    );
     let transcription = handle.runtime.block_on(async {
         let request = TranscriptionRequest::new(audio_data, sample_rate);
         transcription_provider.transcribe(request).await
     })?;
-    eprintln!(
+    log_with_time!(
         "✅ [RUST/TRANSCRIBE] Speech-to-text completed - Raw text: {} chars",
         transcription.text.len()
     );
@@ -457,10 +510,7 @@ fn transcribe_with_audio(
     let (text_with_shortcuts, triggered) = handle.shortcuts.process(&transcription.text);
     let (text_with_corrections, _applied) = handle.learning.apply_corrections(&text_with_shortcuts);
 
-    eprintln!(
-        "🤖 [RUST/AI] Starting AI completion with mode: {:?}",
-        mode
-    );
+    log_with_time!("🤖 [RUST/AI] Starting AI completion with mode: {:?}", mode);
     let completion_result = handle.runtime.block_on(async {
         let mut completion_request = if let Some(name) = app_name.clone() {
             CompletionRequest::new(text_with_corrections.clone(), mode).with_app_context(name)
@@ -486,14 +536,17 @@ fn transcribe_with_audio(
 
     let processed_text = match completion_result {
         Ok(completion) => {
-            eprintln!(
+            log_with_time!(
                 "✅ [RUST/AI] AI completion succeeded - Output: {} chars",
                 completion.text.len()
             );
             completion.text
         }
         Err(err) => {
-            eprintln!("❌ [RUST/AI] Completion failed, using corrected text: {}", err);
+            log_with_time!(
+                "❌ [RUST/AI] Completion failed, using corrected text: {}",
+                err
+            );
             text_with_corrections.clone()
         }
     };
@@ -1024,6 +1077,7 @@ pub extern "C" fn flowwispr_get_stats_json(handle: *mut FlowWhisprHandle) -> *mu
     let stats = serde_json::json!({
         "total_transcriptions": handle.storage.get_transcription_count().unwrap_or(0),
         "total_duration_ms": handle.storage.get_total_transcription_time_ms().unwrap_or(0),
+        "total_words_dictated": handle.storage.get_total_words_dictated().unwrap_or(0),
         "shortcut_count": handle.shortcuts.count(),
         "correction_count": handle.learning.cache_size(),
     });

@@ -196,6 +196,9 @@ public final class FlowWispr: @unchecked Sendable {
     public func transcribe(appName: String? = nil) -> String? {
         guard let handle = handle else { return nil }
 
+        let startTime = Date()
+        print("[\(ISO8601DateFormatter().string(from: startTime))] 🦀 [RUST/FFI] Entering Rust transcription")
+
         let result: UnsafeMutablePointer<CChar>?
         if let app = appName {
             result = app.withCString { cApp in
@@ -204,6 +207,10 @@ public final class FlowWispr: @unchecked Sendable {
         } else {
             result = flowwispr_transcribe(handle, nil)
         }
+
+        let endTime = Date()
+        let duration = endTime.timeIntervalSince(startTime)
+        print("[\(ISO8601DateFormatter().string(from: endTime))] 🦀 [RUST/FFI] Exited Rust transcription - Duration: \(String(format: "%.2f", duration))s")
 
         guard let cString = result else { return nil }
         let string = String(cString: cString)
