@@ -449,6 +449,105 @@ async fn call_openrouter(
         .ok_or_else(|| worker::Error::RustError("No completion returned".to_string()))
 }
 
+// ============ Proper Noun Extraction Types ============
+
+#[derive(Debug, Deserialize)]
+struct ExtractProperNounsRequest {
+    potential_words: String, // Space-separated words
+}
+
+#[derive(Debug, Serialize)]
+struct ExtractProperNounsResponse {
+    words: String, // Comma-separated proper nouns
+}
+
+fn build_proper_noun_prompt() -> String {
+    String::from(
+        "You are a word classifier. Given a list of words that a user edited in their text, \
+         identify which ones are likely PROPER NOUNS (names, brands, places, etc.) that should \
+         be learned for future transcription.\n\n\
+         Include:\n\
+         - Person names (John, Sarah)\n\
+         - Company/product names (OpenAI, ChatGPT, Anthropic)\n\
+         - Place names (California, Paris)\n\
+         - Technical terms with specific capitalization (iPhone, macOS)\n\n\
+         Exclude:\n\
+         - Common words even if capitalized\n\
+         - Typo corrections that are just regular words\n\
+         - Slang or informal words\n\n\
+         Return ONLY a comma-separated list of the proper nouns. If none, return empty string.\n\
+         Do not include any explanation or additional text.",
+    )
+}
+
+async fn extract_proper_nouns(env: &Env, potential_words: &str) -> Result<String> {
+    if potential_words.trim().is_empty() {
+        return Ok(String::new());
+    }
+
+    let api_key = env
+        .var("OPENROUTER_API_KEY")
+        .map_err(|_| worker::Error::RustError("Missing OPENROUTER_API_KEY".to_string()))?
+        .to_string();
+
+    let request = OpenRouterRequest {
+        models: vec!["meta-llama/llama-4-maverick:nitro".to_string()],
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: build_proper_noun_prompt(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: format!("Words to classify: {}", potential_words),
+            },
+        ],
+        max_tokens: 200,
+        temperature: 0.1,
+        provider: ProviderConfig {
+            allow_fallbacks: true,
+            sort: SortConfig {
+                by: "throughput".to_string(),
+                partition: "none".to_string(),
+            },
+        },
+    };
+
+    let body = serde_json::to_vec(&request)
+        .map_err(|e| worker::Error::RustError(format!("JSON serialize error: {}", e)))?;
+
+    let headers = Headers::new();
+    headers.set("Authorization", &format!("Bearer {}", api_key))?;
+    headers.set("Content-Type", "application/json")?;
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    init.with_body(Some(body.into()));
+    init.with_headers(headers);
+
+    let upstream = Request::new_with_init(OPENROUTER_API_URL, &init)?;
+    let mut response = Fetch::Request(upstream).send().await?;
+
+    if !response.status_code().to_string().starts_with('2') {
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(worker::Error::RustError(format!(
+            "OpenRouter error {}: {}",
+            response.status_code(),
+            error_text
+        )));
+    }
+
+    let response_text = response.text().await?;
+    let openrouter_response: OpenRouterResponse = serde_json::from_str(&response_text)
+        .map_err(|e| worker::Error::RustError(format!("JSON parse error: {}", e)))?;
+
+    openrouter_response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.trim().to_string())
+        .ok_or_else(|| worker::Error::RustError("No completion returned".to_string()))
+}
+
 // ============ Correction Validation Types ============
 
 #[derive(Debug, Deserialize)]
@@ -613,6 +712,26 @@ pub async fn main(mut req: Request, env: Env, _ctx: worker::Context) -> Result<R
     }
 
     let path = req.path();
+
+    // Route: /extract-proper-nouns
+    if path == "/extract-proper-nouns" {
+        let body_bytes = req.bytes().await?;
+        let request: ExtractProperNounsRequest = match serde_json::from_slice(&body_bytes) {
+            Ok(r) => r,
+            Err(e) => return Response::error(format!("Invalid JSON: {}", e), 400),
+        };
+
+        let words = extract_proper_nouns(&env, &request.potential_words).await?;
+
+        let response = ExtractProperNounsResponse { words };
+        let json = serde_json::to_string(&response)
+            .map_err(|e| worker::Error::RustError(format!("JSON error: {}", e)))?;
+
+        let headers = Headers::new();
+        headers.set("Content-Type", "application/json")?;
+
+        return Ok(Response::ok(json)?.with_headers(headers));
+    }
 
     // Route: /validate-corrections
     if path == "/validate-corrections" {

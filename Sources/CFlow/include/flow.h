@@ -287,6 +287,46 @@ uint8_t flow_get_cloud_transcription_provider(FlowHandle* handle);
 /// @return Error string (caller must free with flow_free_string) or NULL if none
 char* flow_get_last_error(FlowHandle* handle);
 
+// ============ Alignment and Edit Detection ============
+
+/// Align original and edited text, extract correction candidates
+/// Uses Needleman-Wunsch algorithm with word-level scoring
+/// @param original Original text
+/// @param edited Edited text
+/// @return JSON string with alignment result (caller must free with flow_free_string), or NULL on error
+char* flow_align_and_extract_corrections(const char* original, const char* edited);
+
+/// Get dictionary context for ASR vocabulary prompting
+/// @param handle Engine handle
+/// @param limit Maximum number of words to return
+/// @return JSON array of words (caller must free with flow_free_string)
+char* flow_get_dictionary_context(FlowHandle* handle, uint32_t limit);
+
+/// Save edit analytics for tracking alignment patterns
+/// @param handle Engine handle
+/// @param word_edit_vector Word-level edit vector (e.g., "MMSMM")
+/// @param punct_edit_vector Punctuation edit vector (can be NULL)
+/// @param original_text Original text (can be NULL)
+/// @param edited_text Edited text (can be NULL)
+/// @return true on success
+bool flow_save_edit_analytics(FlowHandle* handle, const char* word_edit_vector, const char* punct_edit_vector, const char* original_text, const char* edited_text);
+
+/// Save a learned words session for undo functionality
+/// @param handle Engine handle
+/// @param words_json JSON array of learned words
+/// @return Session ID (or -1 on error)
+int64_t flow_save_learned_words_session(FlowHandle* handle, const char* words_json);
+
+/// Undo the most recent learned words session
+/// @param handle Engine handle
+/// @return true if undo was performed
+bool flow_undo_learned_words(FlowHandle* handle);
+
+/// Get the most recent undoable learned words
+/// @param handle Engine handle
+/// @return JSON array of words (caller must free with flow_free_string), or NULL if none
+char* flow_get_undoable_learned_words(FlowHandle* handle);
+
 #ifdef __cplusplus
 }
 #endif

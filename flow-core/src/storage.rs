@@ -4,10 +4,11 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::migrations;
 use crate::types::{
     AnalyticsEvent, AppCategory, AppContext, Contact, ContactCategory, Correction,
     CorrectionSource, EventType, Shortcut, Transcription, TranscriptionHistoryEntry,
@@ -51,126 +52,26 @@ impl Storage {
         Ok(storage)
     }
 
-    /// Initialize database schema
+    /// Initialize database schema using migration system
     fn init_schema(&self) -> Result<()> {
         let conn = self.conn.lock();
 
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS transcriptions (
-                id TEXT PRIMARY KEY,
-                raw_text TEXT NOT NULL,
-                processed_text TEXT NOT NULL,
-                confidence REAL NOT NULL,
-                duration_ms INTEGER NOT NULL,
-                app_name TEXT,
-                bundle_id TEXT,
-                window_title TEXT,
-                app_category TEXT,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS transcription_history (
-                id TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
-                text TEXT NOT NULL,
-                error TEXT,
-                duration_ms INTEGER NOT NULL,
-                app_name TEXT,
-                bundle_id TEXT,
-                window_title TEXT,
-                app_category TEXT,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS shortcuts (
-                id TEXT PRIMARY KEY,
-                trigger TEXT NOT NULL UNIQUE,
-                replacement TEXT NOT NULL,
-                case_sensitive INTEGER NOT NULL DEFAULT 0,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                use_count INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS corrections (
-                id TEXT PRIMARY KEY,
-                original TEXT NOT NULL,
-                corrected TEXT NOT NULL,
-                occurrences INTEGER NOT NULL DEFAULT 1,
-                confidence REAL NOT NULL DEFAULT 0.5,
-                source TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(original, corrected)
-            );
-
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                properties TEXT NOT NULL,
-                app_name TEXT,
-                bundle_id TEXT,
-                window_title TEXT,
-                app_category TEXT,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS app_modes (
-                app_name TEXT PRIMARY KEY,
-                writing_mode TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS style_samples (
-                id TEXT PRIMARY KEY,
-                app_name TEXT NOT NULL,
-                sample_text TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS contacts (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                organization TEXT,
-                category TEXT NOT NULL,
-                frequency INTEGER NOT NULL DEFAULT 0,
-                last_contacted TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_transcriptions_created ON transcriptions(created_at);
-            CREATE INDEX IF NOT EXISTS idx_shortcuts_trigger ON shortcuts(trigger);
-            CREATE INDEX IF NOT EXISTS idx_corrections_original ON corrections(original);
-            CREATE INDEX IF NOT EXISTS idx_transcription_history_created ON transcription_history(created_at);
-            CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
-            CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
-            CREATE INDEX IF NOT EXISTS idx_style_samples_app ON style_samples(app_name);
-            CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
-            CREATE INDEX IF NOT EXISTS idx_contacts_frequency ON contacts(frequency DESC);
-            "#,
-        )?;
-
-        // Migration: Add raw_text column to transcription_history if it doesn't exist
-        let _ = conn.execute(
-            "ALTER TABLE transcription_history ADD COLUMN raw_text TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        // Run all pending migrations
+        match migrations::run_migrations(&conn) {
+            Ok(count) => {
+                if count > 0 {
+                    info!("Applied {} database migration(s)", count);
+                }
+            }
+            Err(e) => {
+                warn!("Migration error (may be benign): {}", e);
+                // Continue anyway - migrations are designed to be idempotent
+            }
+        }
 
         // Seed default corrections (only if table is empty)
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM corrections",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM corrections", [], |row| row.get(0))?;
 
         if count == 0 {
             let now = Utc::now().to_rfc3339();
@@ -545,14 +446,39 @@ impl Storage {
     // ========== Correction methods ==========
 
     /// Save or update a correction
+    ///
+    /// Confidence is calculated based on occurrence count using:
+    /// confidence = 0.5 + 0.5 * (1.0 - 1.0 / ln(occurrences + e))
+    /// This ensures corrections gain confidence as they're seen more often.
     pub fn save_correction(&self, correction: &Correction) -> Result<()> {
         let conn = self.conn.lock();
+
+        // Check if correction already exists and get current occurrences
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT occurrences FROM corrections WHERE original = ?1 AND corrected = ?2",
+                params![&correction.original, &correction.corrected],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let (occurrences, confidence) = if let Some(current_occurrences) = existing {
+            // Existing correction: increment and recalculate confidence
+            let new_occurrences = current_occurrences + 1;
+            let confidence = Self::calculate_confidence(new_occurrences as u32);
+            (new_occurrences, confidence)
+        } else {
+            // New correction: use initial occurrences and calculate confidence
+            let confidence = Self::calculate_confidence(correction.occurrences);
+            (correction.occurrences as i64, confidence)
+        };
+
         conn.execute(
             r#"
             INSERT INTO corrections (id, original, corrected, occurrences, confidence, source, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(original, corrected) DO UPDATE SET
-                occurrences = occurrences + 1,
+                occurrences = ?4,
                 confidence = ?5,
                 updated_at = ?8
             "#,
@@ -560,18 +486,26 @@ impl Storage {
                 correction.id.to_string(),
                 correction.original,
                 correction.corrected,
-                correction.occurrences,
-                correction.confidence,
+                occurrences,
+                confidence,
                 format!("{:?}", correction.source),
                 correction.created_at.to_rfc3339(),
                 correction.updated_at.to_rfc3339(),
             ],
         )?;
         debug!(
-            "Saved correction {} -> {}",
-            correction.original, correction.corrected
+            "Saved correction {} -> {} (occurrences: {}, confidence: {:.2})",
+            correction.original, correction.corrected, occurrences, confidence
         );
         Ok(())
+    }
+
+    /// Calculate confidence based on occurrence count
+    /// Formula: 0.5 + 0.5 * (1.0 - 1.0 / ln(occurrences + e)), capped at 0.99
+    fn calculate_confidence(occurrences: u32) -> f32 {
+        let e = std::f32::consts::E;
+        let confidence = 0.5 + 0.5 * (1.0 - 1.0 / (occurrences as f32 + e).ln());
+        confidence.min(0.99)
     }
 
     /// Get correction for a word if confidence is high enough
@@ -1102,6 +1036,140 @@ impl Storage {
 
         debug!("Deleted contact: {}", name);
         Ok(())
+    }
+
+    // ========== Dictionary Context (for ASR prompting) ==========
+
+    /// Get dictionary context for ASR vocabulary prompting
+    /// Returns high-confidence corrections sorted by recency, deduped
+    pub fn get_dictionary_context(&self, limit: usize) -> Result<Vec<String>> {
+        let conn = self.conn.lock();
+
+        // Get corrections sorted by recency and confidence
+        // Prioritize recently used words, then by confidence
+        let mut stmt = conn.prepare(
+            "SELECT corrected FROM corrections
+             WHERE confidence >= 0.5
+             ORDER BY
+               CASE WHEN updated_at > datetime('now', '-1 day') THEN 0 ELSE 1 END,
+               confidence DESC,
+               updated_at DESC
+             LIMIT ?1",
+        )?;
+
+        let words: Vec<String> = stmt
+            .query_map([limit as i64], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Dedupe while preserving order
+        let mut seen = std::collections::HashSet::new();
+        Ok(words
+            .into_iter()
+            .filter(|w| seen.insert(w.clone()))
+            .collect())
+    }
+
+    // ========== Edit Analytics ==========
+
+    /// Save edit analytics for tracking alignment patterns
+    pub fn save_edit_analytics(
+        &self,
+        transcript_id: Option<&str>,
+        word_edit_vector: &str,
+        punct_edit_vector: Option<&str>,
+        original_text: Option<&str>,
+        edited_text: Option<&str>,
+    ) -> Result<i64> {
+        let conn = self.conn.lock();
+
+        conn.execute(
+            r#"
+            INSERT INTO edit_analytics (transcript_id, word_edit_vector, punct_edit_vector, original_text, edited_text)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                transcript_id,
+                word_edit_vector,
+                punct_edit_vector,
+                original_text,
+                edited_text,
+            ],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        debug!("Saved edit analytics with id {}", id);
+        Ok(id)
+    }
+
+    // ========== Learned Words Sessions (for Undo) ==========
+
+    /// Save a session of newly learned words (for undo functionality)
+    pub fn save_learned_words_session(&self, words: &[String]) -> Result<i64> {
+        let conn = self.conn.lock();
+
+        let words_json = serde_json::to_string(words).unwrap_or_else(|_| "[]".to_string());
+
+        conn.execute(
+            "INSERT INTO learned_words_sessions (words) VALUES (?1)",
+            [&words_json],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        debug!("Saved learned words session with id {}: {:?}", id, words);
+        Ok(id)
+    }
+
+    /// Get the most recent learned words session that can be undone
+    pub fn get_undoable_learned_words(&self) -> Result<Option<(i64, Vec<String>)>> {
+        let conn = self.conn.lock();
+
+        let result: Option<(i64, String)> = conn
+            .query_row(
+                "SELECT id, words FROM learned_words_sessions
+                 WHERE can_undo = 1
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        match result {
+            Some((id, words_json)) => {
+                let words: Vec<String> = serde_json::from_str(&words_json).unwrap_or_default();
+                Ok(Some((id, words)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Mark a learned words session as no longer undoable
+    pub fn mark_learned_words_used(&self, session_id: i64) -> Result<()> {
+        let conn = self.conn.lock();
+
+        conn.execute(
+            "UPDATE learned_words_sessions SET can_undo = 0 WHERE id = ?1",
+            [session_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Delete a correction by its corrected word (for undo)
+    pub fn delete_correction_by_word(&self, corrected_word: &str) -> Result<bool> {
+        let conn = self.conn.lock();
+
+        let rows = conn.execute(
+            "DELETE FROM corrections WHERE corrected = ?1",
+            [corrected_word],
+        )?;
+
+        debug!(
+            "Deleted {} correction(s) for word: {}",
+            rows, corrected_word
+        );
+        Ok(rows > 0)
     }
 }
 

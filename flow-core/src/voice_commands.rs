@@ -11,7 +11,7 @@ const WAKE_PHRASE: &str = "hey flow";
 ///
 /// # Examples
 /// ```
-/// use flow_core::voice_commands::extract_voice_command;
+/// use flow::voice_commands::extract_voice_command;
 ///
 /// assert_eq!(
 ///     extract_voice_command("Hey Flow, reject him politely"),

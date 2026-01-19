@@ -72,7 +72,7 @@ impl WritingMode {
             AppCategory::Email => WritingMode::Formal,
             AppCategory::Code => WritingMode::Formal,
             AppCategory::Documents => WritingMode::Formal,
-            AppCategory::Slack => WritingMode::Formal,
+            AppCategory::Slack => WritingMode::Casual,
             AppCategory::Social => WritingMode::VeryCasual,
             AppCategory::Browser => WritingMode::Casual,
             AppCategory::Terminal => WritingMode::VeryCasual,

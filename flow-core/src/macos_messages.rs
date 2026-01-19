@@ -28,7 +28,7 @@ impl MessagesDetector {
             .arg("-e")
             .arg(script)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             // Messages not running or no window
@@ -75,7 +75,7 @@ impl MessagesDetector {
             .arg("-e")
             .arg(script)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             return Ok(false);
@@ -107,7 +107,7 @@ impl MessagesDetector {
             .arg("-e")
             .arg(script)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             return Ok(Vec::new());
@@ -122,7 +122,7 @@ impl MessagesDetector {
         // AppleScript returns comma-separated list
         let names: Vec<String> = result
             .split(", ")
-            .map(|s| Self::normalize_window_title(s))
+            .map(Self::normalize_window_title)
             .filter(|s| !s.is_empty())
             .collect();
 

@@ -1,9 +1,9 @@
 //
-// EditLearningService.swift
-// Flow
+//  EditLearningService.swift
+//  Flow
 //
-// Monitors text field edits after transcription paste to learn user corrections.
-// Uses macOS Accessibility API to read focused text elements.
+//  Monitors text field edits after transcription paste to learn user corrections.
+//  Uses AX-based monitoring with Needleman-Wunsch alignment for edit detection.
 //
 
 import AppKit
@@ -13,14 +13,16 @@ import Flow
 /// Service that detects when users edit pasted transcription text and triggers learning.
 ///
 /// After a transcription is pasted:
-/// 1. Polls the focused text element every second
-/// 2. Tracks when text last changed
-/// 3. When text is stable for 5+ seconds, triggers learning
-/// 4. Gives up after 30 seconds max
+/// 1. Uses AX notifications to monitor text changes (event-driven, not polling)
+/// 2. When text is stable for 1.5+ seconds, runs alignment via Rust
+/// 3. Filters corrections through proper noun detection API
+/// 4. Shows toast notification with undo option
 final class EditLearningService {
     static let shared = EditLearningService()
 
-    /// How often to poll the text field (seconds)
+    // MARK: - Configuration
+
+    /// How often to poll the text field as fallback (seconds)
     private let pollInterval: TimeInterval = 1.0
 
     /// How long text must be unchanged before we consider it "stable" (seconds)
@@ -35,10 +37,15 @@ final class EditLearningService {
     /// Minimum word overlap ratio required (edited text should share words with original)
     private let minimumWordOverlap: Double = 0.3
 
-    /// Reference to the Flow engine for calling learnFromEdit
+    // MARK: - State
+
+    /// Reference to the Flow engine for calling Rust functions
     private var engine: Flow?
 
-    /// Timer for polling
+    /// AX-based monitor (preferred method)
+    private let axMonitor = AXEditMonitorService()
+
+    /// Timer for polling (fallback)
     private var pollTimer: Timer?
 
     /// Original text that was pasted
@@ -53,7 +60,7 @@ final class EditLearningService {
     /// Last text we read from the field
     private var lastReadText: String?
 
-    /// When the text last changed
+    /// Last change time
     private var lastChangeTime: Date?
 
     /// Known bad values that indicate we read the wrong element
@@ -65,7 +72,12 @@ final class EditLearningService {
         "about:blank"
     ]
 
+    /// Worker URL for proper noun extraction
+    private let workerBaseURL = "https://flow-transcribe.flow-voice.workers.dev"
+
     private init() {}
+
+    // MARK: - Public Methods
 
     /// Configure the service with the Flow engine
     func configure(engine: Flow) {
@@ -94,7 +106,20 @@ final class EditLearningService {
 
         log("Starting edit monitoring for \(originalText.count) chars in \(targetApp?.localizedName ?? "Unknown")")
 
-        // Start polling
+        // Try AX-based monitoring first (preferred)
+        if let pid = targetAppPID,
+           let element = AXEditMonitorService.getFocusedTextElement(pid: pid) {
+
+            axMonitor.onEditDetected = { [weak self] original, edited in
+                self?.processEdit(original: original, edited: edited)
+            }
+            axMonitor.startMonitoring(element: element, originalText: originalText)
+            log("Using AX notification-based monitoring")
+            return
+        }
+
+        // Fall back to polling-based monitoring
+        log("Falling back to polling-based monitoring")
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.pollTextElement()
         }
@@ -104,10 +129,22 @@ final class EditLearningService {
     func cancelMonitoring() {
         pollTimer?.invalidate()
         pollTimer = nil
+        axMonitor.stopMonitoring()
         cleanup()
     }
 
-    // MARK: - Private
+    /// Undo the most recent learned words
+    func undoLastLearnedWords() {
+        guard let engine = engine else { return }
+
+        if engine.undoLearnedWords() {
+            log("Successfully undid last learned words")
+        } else {
+            log("No learned words to undo")
+        }
+    }
+
+    // MARK: - Private Methods
 
     private func pollTextElement() {
         guard let original = originalText,
@@ -124,7 +161,7 @@ final class EditLearningService {
             // Try to learn from whatever we have
             if let lastText = lastReadText, lastText != original {
                 log("Using last captured text as final edit")
-                checkAndLearn(original: original, current: lastText)
+                processEdit(original: original, edited: lastText)
             }
             cancelMonitoring()
             return
@@ -133,10 +170,9 @@ final class EditLearningService {
         // Try to read the focused text element
         guard let (currentText, role) = readFocusedTextElement(pid: pid) else {
             // Lost focus - treat this as "done editing" signal
-            // Use the last text we captured as the final edit
             if let lastText = lastReadText, lastText != original {
                 log("Lost focus, treating last text as final edit")
-                checkAndLearn(original: original, current: lastText)
+                processEdit(original: original, edited: lastText)
             } else {
                 log("Lost focus on text element, no edits detected")
             }
@@ -148,7 +184,6 @@ final class EditLearningService {
         let validRoles = ["AXTextArea", "AXTextField", "AXTextView", "AXWebArea", "AXStaticText"]
         let roleIsValid = validRoles.contains { role.contains($0) }
         if !roleIsValid {
-            // Wrong element type, keep waiting
             return
         }
 
@@ -170,104 +205,149 @@ final class EditLearningService {
         let stableFor = Date().timeIntervalSince(lastChange)
 
         if stableFor >= stabilityThreshold {
-            // Text has been stable, time to learn
-            log("Text stable for \(Int(stableFor))s, checking for edits")
-            checkAndLearn(original: original, current: currentText)
+            log("Text stable for \(Int(stableFor))s, processing edits")
+            processEdit(original: original, edited: currentText)
             cancelMonitoring()
         }
     }
 
-    private func checkAndLearn(original: String, current: String) {
+    /// Process detected edit using alignment algorithm
+    private func processEdit(original: String, edited: String) {
         guard let engine = engine else { return }
 
         // Skip if texts are identical (no edits made)
-        if current == original {
+        if edited == original {
             log("No edits detected, text unchanged")
             return
         }
 
-        // Validate there's meaningful word overlap (user edited, didn't completely replace)
-        let overlap = wordOverlapRatio(original: original, edited: current)
+        // Validate there's meaningful word overlap
+        let overlap = wordOverlapRatio(original: original, edited: edited)
         if overlap < minimumWordOverlap {
             log("Insufficient word overlap (\(Int(overlap * 100))%), probably wrong element")
             return
         }
 
-        // Extract word-level corrections
-        let corrections = extractWordCorrections(original: original, edited: current)
-
-        if corrections.isEmpty {
-            log("No word-level corrections detected")
+        // Get alignment result from Rust
+        guard let alignmentJSON = engine.alignAndExtractCorrections(original: original, edited: edited),
+              let alignmentData = alignmentJSON.data(using: .utf8),
+              let alignment = try? JSONDecoder().decode(AlignmentResult.self, from: alignmentData) else {
+            log("Failed to get alignment from Rust")
+            // Fall back to legacy learning
+            let _ = engine.learnFromEdit(original: original, edited: edited)
             return
         }
 
-        log("Detected \(corrections.count) potential correction(s)")
-        for (orig, corr) in corrections {
-            log("  '\(orig)' -> '\(corr)'")
+        log("Alignment: \(alignment.wordEditVector)")
+        log("Found \(alignment.corrections.count) potential correction(s)")
+
+        guard !alignment.corrections.isEmpty else {
+            log("No corrections detected")
+            return
         }
 
-        // Validate corrections via AI
-        if let validations = engine.validateCorrections(corrections) {
-            let validCount = validations.filter { $0.valid }.count
-            log("AI validation: \(validCount)/\(validations.count) corrections valid")
+        // Get the corrected words for proper noun filtering
+        let correctedWords = alignment.corrections.map { $0.corrected }.joined(separator: " ")
 
-            for validation in validations {
-                if validation.valid {
-                    log("  ✓ '\(validation.original)' -> '\(validation.corrected)'")
-                } else {
-                    log("  ✗ '\(validation.original)' -> '\(validation.corrected)': \(validation.reason ?? "unknown")")
-                }
-            }
+        // Filter through proper noun API
+        Task {
+            let properNouns = await filterProperNouns(words: correctedWords)
 
-            // Only proceed if we have at least one valid correction
-            if validCount == 0 {
-                log("No valid corrections, skipping learning")
+            guard !properNouns.isEmpty else {
+                log("No proper nouns detected, skipping learning")
                 return
             }
-        } else {
-            log("AI validation unavailable, proceeding with heuristic check")
-        }
 
-        // Learn from edit (Rust will do its own Jaro-Winkler matching)
-        if engine.learnFromEdit(original: original, edited: current) {
-            log("Learned from edit successfully")
+            log("Detected proper nouns: \(properNouns.joined(separator: ", "))")
+
+            // Filter corrections to only proper nouns
+            let filteredCorrections = alignment.corrections.filter { correction in
+                properNouns.contains { $0.lowercased() == correction.corrected.lowercased() }
+            }
+
+            guard !filteredCorrections.isEmpty else {
+                log("No proper noun corrections to learn")
+                return
+            }
+
+            // Learn each correction
+            var learnedWords: [String] = []
+            for correction in filteredCorrections {
+                log("Learning: '\(correction.original)' -> '\(correction.corrected)'")
+
+                // Use the existing learn mechanism which will save to DB
+                let _ = engine.learnFromEdit(original: correction.original, edited: correction.corrected)
+                learnedWords.append(correction.corrected)
+            }
+
+            // Save learned words session for undo
+            if !learnedWords.isEmpty {
+                engine.saveLearnedWordsSession(words: learnedWords)
+
+                // Save edit analytics
+                engine.saveEditAnalytics(
+                    wordEditVector: alignment.wordEditVector,
+                    punctEditVector: alignment.punctEditVector,
+                    original: original,
+                    edited: edited
+                )
+
+                // Show toast notification on main thread
+                await MainActor.run {
+                    showLearnedWordsToast(words: learnedWords)
+                }
+            }
         }
     }
 
-    /// Extract word-level corrections by comparing original and edited text
-    private func extractWordCorrections(original: String, edited: String) -> [(original: String, corrected: String)] {
-        let originalWords = original.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        let editedWords = edited.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+    /// Filter words through proper noun detection API
+    private func filterProperNouns(words: String) async -> [String] {
+        guard !words.isEmpty else { return [] }
 
-        var corrections: [(original: String, corrected: String)] = []
-
-        // Simple position-based comparison (similar to Rust's learn_from_edit)
-        let minLen = min(originalWords.count, editedWords.count)
-
-        for i in 0..<minLen {
-            let orig = originalWords[i].lowercased()
-            let edit = editedWords[i].lowercased()
-
-            // Skip if identical
-            if orig == edit { continue }
-
-            // Skip very short words
-            if orig.count < 2 || edit.count < 2 { continue }
-
-            // Skip if length difference is too large (probably not a typo fix)
-            if abs(orig.count - edit.count) > 2 { continue }
-
-            // Strip punctuation for comparison
-            let origClean = orig.trimmingCharacters(in: .punctuationCharacters)
-            let editClean = edit.trimmingCharacters(in: .punctuationCharacters)
-
-            // Skip if only punctuation differs
-            if origClean == editClean { continue }
-
-            corrections.append((original: origClean, corrected: editClean))
+        // Build request
+        guard let url = URL(string: "\(workerBaseURL)/extract-proper-nouns") else {
+            return []
         }
 
-        return corrections
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: String] = ["potential_words": words]
+        request.httpBody = try? JSONEncoder().encode(body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                log("Proper noun API returned non-200")
+                return []
+            }
+
+            struct ProperNounResponse: Decodable {
+                let words: String
+            }
+
+            let result = try JSONDecoder().decode(ProperNounResponse.self, from: data)
+
+            // Parse comma-separated list
+            return result.words
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+
+        } catch {
+            log("Proper noun API error: \(error)")
+            return []
+        }
+    }
+
+    /// Show toast notification for learned words
+    private func showLearnedWordsToast(words: [String]) {
+        LearnedWordsToastController.shared.show(words: words) { [weak self] in
+            self?.undoLastLearnedWords()
+        }
     }
 
     private func cleanup() {
@@ -282,12 +362,10 @@ final class EditLearningService {
     private func isInvalidText(_ text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Very short text is suspicious
         if lower.count < 5 {
             return true
         }
 
-        // Check against known bad patterns
         for pattern in invalidPatterns {
             if lower.hasPrefix(pattern) || lower == pattern {
                 return true
@@ -309,11 +387,9 @@ final class EditLearningService {
     }
 
     /// Read the current text from the focused UI element in the target app
-    /// Returns tuple of (text, role) for validation
     private func readFocusedTextElement(pid: pid_t) -> (String, String)? {
         let appElement = AXUIElementCreateApplication(pid)
 
-        // Get the focused UI element
         var focusedElement: CFTypeRef?
         let focusResult = AXUIElementCopyAttributeValue(
             appElement,
@@ -322,35 +398,15 @@ final class EditLearningService {
         )
 
         guard focusResult == .success, let focused = focusedElement else {
-            log("Could not get focused element (error: \(focusResult.rawValue))")
             return nil
         }
 
         let axElement = focused as! AXUIElement
 
-        // Get the role for validation
         var roleRef: CFTypeRef?
         AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleRef)
         let role = (roleRef as? String) ?? "Unknown"
 
-        // Get role description for debugging
-        var roleDescRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(axElement, kAXRoleDescriptionAttribute as CFString, &roleDescRef)
-        let roleDesc = (roleDescRef as? String) ?? ""
-
-        // Get title for debugging
-        var titleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(axElement, kAXTitleAttribute as CFString, &titleRef)
-        let title = (titleRef as? String) ?? ""
-
-        // Get description for debugging
-        var descRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(axElement, kAXDescriptionAttribute as CFString, &descRef)
-        let desc = (descRef as? String) ?? ""
-
-        log("Focused element: role=\(role), roleDesc=\(roleDesc), title='\(title.prefix(30))', desc='\(desc.prefix(30))'")
-
-        // Try to get the value attribute (text content)
         var value: CFTypeRef?
         let valueResult = AXUIElementCopyAttributeValue(
             axElement,
@@ -359,11 +415,10 @@ final class EditLearningService {
         )
 
         if valueResult == .success, let textValue = value as? String, !textValue.isEmpty {
-            log("Got value: '\(textValue.prefix(50))...' (\(textValue.count) chars)")
             return (textValue, role)
         }
 
-        // Some elements use kAXSelectedTextAttribute for text fields with selection
+        // Try selected text as fallback
         var selectedText: CFTypeRef?
         let selectedResult = AXUIElementCopyAttributeValue(
             axElement,
@@ -372,25 +427,20 @@ final class EditLearningService {
         )
 
         if selectedResult == .success, let selected = selectedText as? String, !selected.isEmpty {
-            log("Got selected text: '\(selected.prefix(50))...'")
             return (selected, role)
         }
 
-        // For web areas, try to get the focused element within it
+        // For web areas, try to find text in children
         if role == "AXWebArea" {
-            log("WebArea detected, looking for focused child...")
             if let childText = findTextInWebArea(axElement) {
                 return (childText, role)
             }
         }
 
-        log("Could not read text value (error: \(valueResult.rawValue))")
         return nil
     }
 
-    /// Try to find editable text within a web area by looking for text fields
     private func findTextInWebArea(_ webArea: AXUIElement) -> String? {
-        // Get children
         var childrenRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(webArea, kAXChildrenAttribute as CFString, &childrenRef)
 
@@ -398,7 +448,6 @@ final class EditLearningService {
             return nil
         }
 
-        // Look for text areas or text fields in children (limited depth)
         for child in children.prefix(20) {
             var roleRef: CFTypeRef?
             AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef)
@@ -408,12 +457,11 @@ final class EditLearningService {
                 var valueRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(child, kAXValueAttribute as CFString, &valueRef) == .success,
                    let text = valueRef as? String, !text.isEmpty {
-                    log("Found text in child \(childRole): '\(text.prefix(50))...'")
                     return text
                 }
             }
 
-            // Check one level deeper
+            // Check grandchildren
             var grandchildrenRef: CFTypeRef?
             if AXUIElementCopyAttributeValue(child, kAXChildrenAttribute as CFString, &grandchildrenRef) == .success,
                let grandchildren = grandchildrenRef as? [AXUIElement] {
@@ -426,7 +474,6 @@ final class EditLearningService {
                         var valueRef: CFTypeRef?
                         if AXUIElementCopyAttributeValue(grandchild, kAXValueAttribute as CFString, &valueRef) == .success,
                            let text = valueRef as? String, !text.isEmpty {
-                            log("Found text in grandchild \(gcRole): '\(text.prefix(50))...'")
                             return text
                         }
                     }
@@ -442,5 +489,47 @@ final class EditLearningService {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         print("[\(timestamp)] [EditLearning] \(message)")
         #endif
+    }
+}
+
+// MARK: - Alignment Result Model
+
+/// Decoded alignment result from Rust
+private struct AlignmentResult: Decodable {
+    let steps: [AlignmentStep]
+    let wordEditVector: String
+    let punctEditVector: String
+    let corrections: [Correction]
+
+    enum CodingKeys: String, CodingKey {
+        case steps
+        case wordEditVector = "word_edit_vector"
+        case punctEditVector = "punct_edit_vector"
+        case corrections
+    }
+
+    struct AlignmentStep: Decodable {
+        let wordLabel: String
+        let punctLabel: String
+        let originalWord: String
+        let editedWord: String
+
+        enum CodingKeys: String, CodingKey {
+            case wordLabel = "word_label"
+            case punctLabel = "punct_label"
+            case originalWord = "original_word"
+            case editedWord = "edited_word"
+        }
+    }
+
+    struct Correction: Decodable {
+        let original: String
+        let corrected: String
+
+        init(from decoder: Decoder) throws {
+            var container = try decoder.unkeyedContainer()
+            original = try container.decode(String.self)
+            corrected = try container.decode(String.self)
+        }
     }
 }

@@ -53,8 +53,8 @@ impl SimpleVad {
     /// Create a new VAD instance with default settings
     pub fn new() -> Self {
         Self {
-            threshold: 0.01, // RMS threshold (adjust based on mic sensitivity)
-            min_speech_chunks: 3, // ~96ms of speech to trigger
+            threshold: 0.01,        // RMS threshold (adjust based on mic sensitivity)
+            min_speech_chunks: 3,   // ~96ms of speech to trigger
             min_silence_chunks: 15, // ~480ms of silence to end
             speech_chunk_count: 0,
             silence_chunk_count: 0,

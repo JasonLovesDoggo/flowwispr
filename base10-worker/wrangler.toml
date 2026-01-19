@@ -1,10 +1,13 @@
 name = "base10-proxy"
 main = "build/worker/shim.mjs"
-compatibility_date = "2024-06-01"
+ccompatibility_flags = [ "nodejs_compat" ]
+compatibility_date = "2024-09-23"
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
 
+[ai]
+binding = "AI"
 
 [observability]
 [observability.logs]

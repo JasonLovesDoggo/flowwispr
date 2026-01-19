@@ -1554,11 +1554,11 @@ fn mask_api_key(key: &str) -> String {
 
     // For OpenAI keys (sk-...)
     if key.starts_with("sk-") {
-        return format!("sk-••••••••");
+        return "sk-••••••••".to_string();
     }
     // For Gemini keys (AI...)
     if key.starts_with("AI") {
-        return format!("AI••••••••");
+        return "AI••••••••".to_string();
     }
     // For other keys, just show dots
     "••••••••".to_string()
@@ -2109,5 +2109,174 @@ pub extern "C" fn flow_get_cloud_transcription_provider(handle: *mut FlowHandle)
             _ => 1, // default to Auto
         },
         _ => 1, // default to Auto
+    }
+}
+
+// ============ Alignment and Edit Detection ============
+
+/// Align original and edited text, extract correction candidates
+/// Returns JSON with alignment result (caller must free with flow_free_string)
+/// JSON format:
+/// {
+///   "steps": [...],
+///   "word_edit_vector": "MMSMM",
+///   "punct_edit_vector": "ZZZZ",
+///   "corrections": [["original", "corrected"], ...]
+/// }
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_align_and_extract_corrections(
+    original: *const c_char,
+    edited: *const c_char,
+) -> *mut c_char {
+    if original.is_null() || edited.is_null() {
+        return ptr::null_mut();
+    }
+
+    let original_str = match unsafe { CStr::from_ptr(original) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let edited_str = match unsafe { CStr::from_ptr(edited) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let json = crate::alignment::align_and_extract_corrections_json(original_str, edited_str);
+
+    match CString::new(json) {
+        Ok(cstr) => cstr.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Get dictionary context for ASR prompting
+/// Returns JSON array of high-confidence learned words (caller must free with flow_free_string)
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_get_dictionary_context(handle: *mut FlowHandle, limit: u32) -> *mut c_char {
+    let handle = unsafe { &*handle };
+
+    let words = handle
+        .storage
+        .get_dictionary_context(limit as usize)
+        .unwrap_or_default();
+
+    let json = serde_json::to_string(&words).unwrap_or_else(|_| "[]".to_string());
+
+    match CString::new(json) {
+        Ok(cstr) => cstr.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Save edit analytics for tracking alignment patterns
+/// Returns true on success
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_save_edit_analytics(
+    handle: *mut FlowHandle,
+    word_edit_vector: *const c_char,
+    punct_edit_vector: *const c_char,
+    original_text: *const c_char,
+    edited_text: *const c_char,
+) -> bool {
+    let handle = unsafe { &*handle };
+
+    let word_vec = match unsafe { CStr::from_ptr(word_edit_vector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let punct_vec = if punct_edit_vector.is_null() {
+        None
+    } else {
+        unsafe { CStr::from_ptr(punct_edit_vector) }.to_str().ok()
+    };
+
+    let original = if original_text.is_null() {
+        None
+    } else {
+        unsafe { CStr::from_ptr(original_text) }.to_str().ok()
+    };
+
+    let edited = if edited_text.is_null() {
+        None
+    } else {
+        unsafe { CStr::from_ptr(edited_text) }.to_str().ok()
+    };
+
+    handle
+        .storage
+        .save_edit_analytics(None, word_vec, punct_vec, original, edited)
+        .is_ok()
+}
+
+/// Save a learned words session for undo functionality
+/// words_json: JSON array of strings ["word1", "word2", ...]
+/// Returns session ID (or -1 on error)
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_save_learned_words_session(
+    handle: *mut FlowHandle,
+    words_json: *const c_char,
+) -> i64 {
+    let handle = unsafe { &*handle };
+
+    let json_str = match unsafe { CStr::from_ptr(words_json) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let words: Vec<String> = match serde_json::from_str(json_str) {
+        Ok(w) => w,
+        Err(_) => return -1,
+    };
+
+    handle
+        .storage
+        .save_learned_words_session(&words)
+        .unwrap_or(-1)
+}
+
+/// Undo the most recent learned words session
+/// Removes the corrections and marks session as used
+/// Returns true if undo was performed
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_undo_learned_words(handle: *mut FlowHandle) -> bool {
+    let handle = unsafe { &*handle };
+
+    let Some((session_id, words)) = handle.storage.get_undoable_learned_words().ok().flatten()
+    else {
+        return false;
+    };
+
+    // Delete each learned word
+    for word in &words {
+        let _ = handle.storage.delete_correction_by_word(word);
+        // Also remove from learning engine cache
+        handle.learning.remove_from_cache(word);
+    }
+
+    // Mark session as used
+    let _ = handle.storage.mark_learned_words_used(session_id);
+
+    debug!("Undid learned words session {}: {:?}", session_id, words);
+    true
+}
+
+/// Get the most recent undoable learned words as JSON
+/// Returns JSON array of strings (caller must free with flow_free_string)
+/// Returns null if no undoable session exists
+#[unsafe(no_mangle)]
+pub extern "C" fn flow_get_undoable_learned_words(handle: *mut FlowHandle) -> *mut c_char {
+    let handle = unsafe { &*handle };
+
+    let Some((_, words)) = handle.storage.get_undoable_learned_words().ok().flatten() else {
+        return ptr::null_mut();
+    };
+
+    let json = serde_json::to_string(&words).unwrap_or_else(|_| "[]".to_string());
+
+    match CString::new(json) {
+        Ok(cstr) => cstr.into_raw(),
+        Err(_) => ptr::null_mut(),
     }
 }

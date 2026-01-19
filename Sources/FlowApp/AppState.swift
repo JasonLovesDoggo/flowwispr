@@ -84,6 +84,7 @@ final class AppState: ObservableObject {
     private var targetApplication: NSRunningApplication?
     private let volumeManager = VolumeManager()
     private var textFieldContext: TextFieldContext?
+    private var ideContext: IDEContext?
 
     private static let onboardingKey = "onboardingComplete"
 
@@ -436,13 +437,26 @@ final class AppState: ObservableObject {
         }
 
         targetApplication = NSWorkspace.shared.frontmostApplication
+
+        // Extract text field context (selected text, cursor position)
         textFieldContext = AccessibilityContext.extractFocusedTextContext()
         if let context = textFieldContext?.contextSummary {
             log("📝 [CONTEXT] Extracted text context:\n\(context)")
         }
+
+        // Extract IDE context (file names, code symbols)
+        ideContext = AccessibilityContext.extractIDEContext()
+        if let ide = ideContext {
+            log("💻 [IDE] Extracted IDE context:\n\(ide.summary)")
+        }
+
         log("🎤 [RECORDING] Starting recording - App: \(currentApp), Mode: \(currentMode.displayName)")
         pauseMediaPlayback()
         volumeManager.muteForRecording()
+
+        // Play start sound before beginning (so user hears feedback even if mic mutes speakers)
+        AudioFeedback.shared.playStart()
+
         if engine.startRecording() {
             isRecording = true
             isProcessing = false
@@ -476,6 +490,7 @@ final class AppState: ObservableObject {
             }
         } else {
             errorMessage = engine.lastError ?? "Failed to start recording"
+            AudioFeedback.shared.playError()
             volumeManager.restoreAfterRecording()
             resumeMediaPlayback()
         }
@@ -483,6 +498,10 @@ final class AppState: ObservableObject {
 
     func stopRecording() {
         log("⏹️ [RECORDING] Stopping recording - Duration: \(recordingDuration)ms")
+
+        // Play stop sound immediately so user gets instant feedback
+        AudioFeedback.shared.playStop()
+
         recordingTimer?.invalidate()
         recordingTimer = nil
         audioLevelTimer?.invalidate()
@@ -565,6 +584,9 @@ final class AppState: ObservableObject {
                     self.log("❌ [TRANSCRIBE] Transcription failed: \(errorMsg)")
                     self.errorMessage = errorMsg
 
+                    // Play error sound to alert user
+                    AudioFeedback.shared.playError()
+
                     Analytics.shared.track("Transcription Failed", eventProperties: [
                         "app_name": appName,
                         "error": errorMsg,
@@ -614,6 +636,8 @@ final class AppState: ObservableObject {
                 } else {
                     let errorMsg = self.engine.lastError ?? "Retry failed"
                     self.errorMessage = errorMsg
+
+                    AudioFeedback.shared.playError()
 
                     Analytics.shared.track("Transcription Retry Failed", eventProperties: [
                         "app_name": appName,

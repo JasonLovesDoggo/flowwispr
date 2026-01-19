@@ -805,6 +805,7 @@ dependencies = [
  "hound",
  "ndarray",
  "parking_lot",
+ "regex",
  "reqwest 0.13.1",
  "rusqlite",
  "serde",

@@ -335,22 +335,6 @@ mod tests {
     use crate::types::AppCategory;
 
     #[test]
-    fn test_mode_suggestions() {
-        assert_eq!(
-            WritingMode::suggested_for_category(AppCategory::Email),
-            WritingMode::Formal
-        );
-        assert_eq!(
-            WritingMode::suggested_for_category(AppCategory::Slack),
-            WritingMode::Casual
-        );
-        assert_eq!(
-            WritingMode::suggested_for_category(AppCategory::Social),
-            WritingMode::VeryCasual
-        );
-    }
-
-    #[test]
     fn test_style_analysis() {
         assert_eq!(
             StyleAnalyzer::analyze_style("hello how r u"),
@@ -426,5 +410,458 @@ mod tests {
         // "hello." is 6 chars, 1 punct = 100/6 = ~16.67
         let density = calculate_punctuation_density("hello.");
         assert!(density > 16.0 && density < 17.0);
+    }
+
+    // ========== Additional comprehensive tests ==========
+
+    #[test]
+    fn test_all_app_category_suggestions() {
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Email),
+            WritingMode::Formal
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Code),
+            WritingMode::Formal
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Documents),
+            WritingMode::Formal
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Slack),
+            WritingMode::Casual
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Social),
+            WritingMode::VeryCasual
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Browser),
+            WritingMode::Casual
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Terminal),
+            WritingMode::VeryCasual
+        );
+        assert_eq!(
+            WritingMode::suggested_for_category(AppCategory::Unknown),
+            WritingMode::Casual
+        );
+    }
+
+    #[test]
+    fn test_style_analysis_empty_text() {
+        let mode = StyleAnalyzer::analyze_style("");
+        // empty text should probably return default (Casual)
+        assert_eq!(mode, WritingMode::Casual);
+    }
+
+    #[test]
+    fn test_style_analysis_whitespace_only() {
+        let mode = StyleAnalyzer::analyze_style("   \t\n   ");
+        // whitespace-only should return Casual (default)
+        assert_eq!(mode, WritingMode::Casual);
+    }
+
+    #[test]
+    fn test_style_analysis_single_word() {
+        // single word all lowercase
+        assert_eq!(
+            StyleAnalyzer::analyze_style("hello"),
+            WritingMode::VeryCasual
+        );
+
+        // single word capitalized
+        assert_eq!(StyleAnalyzer::analyze_style("Hello"), WritingMode::Casual);
+    }
+
+    #[test]
+    fn test_style_analysis_excited_detection() {
+        // need at least 2 exclamation marks
+        assert_eq!(StyleAnalyzer::analyze_style("Wow!"), WritingMode::Casual);
+        assert_eq!(StyleAnalyzer::analyze_style("Wow!!"), WritingMode::Excited);
+        assert_eq!(
+            StyleAnalyzer::analyze_style("Amazing! Great!"),
+            WritingMode::Excited
+        );
+    }
+
+    #[test]
+    fn test_style_analysis_formal_long_sentences() {
+        // formal requires proper caps, punctuation, and avg sentence length >= 8
+        let formal_text =
+            "I hope this message finds you in good spirits and excellent health today.";
+        assert_eq!(
+            StyleAnalyzer::analyze_style(formal_text),
+            WritingMode::Formal
+        );
+
+        // shorter sentences shouldn't be formal even with caps and punctuation
+        let short_text = "Hello. Yes. Ok.";
+        assert_ne!(
+            StyleAnalyzer::analyze_style(short_text),
+            WritingMode::Formal
+        );
+    }
+
+    #[test]
+    fn test_style_analysis_very_casual() {
+        // all lowercase, no punctuation
+        assert_eq!(
+            StyleAnalyzer::analyze_style("hey whats up"),
+            WritingMode::VeryCasual
+        );
+        assert_eq!(
+            StyleAnalyzer::analyze_style("k cool"),
+            WritingMode::VeryCasual
+        );
+        assert_eq!(
+            StyleAnalyzer::analyze_style("yea sure"),
+            WritingMode::VeryCasual
+        );
+    }
+
+    #[test]
+    fn test_analyze_samples_empty() {
+        let samples: Vec<String> = vec![];
+        assert_eq!(
+            StyleAnalyzer::analyze_samples(&samples),
+            WritingMode::default()
+        );
+    }
+
+    #[test]
+    fn test_analyze_samples_single() {
+        let samples = vec!["hello how r u".to_string()];
+        assert_eq!(
+            StyleAnalyzer::analyze_samples(&samples),
+            WritingMode::VeryCasual
+        );
+    }
+
+    #[test]
+    fn test_analyze_samples_majority_wins() {
+        let samples = vec![
+            "hello".to_string(),           // VeryCasual
+            "hi there".to_string(),        // VeryCasual
+            "This is formal.".to_string(), // Casual (not long enough for Formal)
+        ];
+        // VeryCasual should win by majority
+        let result = StyleAnalyzer::analyze_samples(&samples);
+        assert_eq!(result, WritingMode::VeryCasual);
+    }
+
+    #[test]
+    fn test_engine_default_mode() {
+        let engine = WritingModeEngine::new(WritingMode::Formal);
+        assert_eq!(engine.default_mode(), WritingMode::Formal);
+
+        let engine2 = WritingModeEngine::new(WritingMode::VeryCasual);
+        assert_eq!(engine2.default_mode(), WritingMode::VeryCasual);
+    }
+
+    #[test]
+    fn test_engine_set_default_mode() {
+        let mut engine = WritingModeEngine::new(WritingMode::Casual);
+        assert_eq!(engine.default_mode(), WritingMode::Casual);
+
+        engine.set_default_mode(WritingMode::Formal);
+        assert_eq!(engine.default_mode(), WritingMode::Formal);
+
+        // apps without overrides should now use new default
+        assert_eq!(engine.get_mode("SomeApp"), WritingMode::Formal);
+    }
+
+    #[test]
+    fn test_engine_get_all_overrides() {
+        let mut engine = WritingModeEngine::new(WritingMode::Casual);
+        engine.set_mode("App1", WritingMode::Formal);
+        engine.set_mode("App2", WritingMode::Excited);
+
+        let overrides = engine.get_all_overrides();
+        assert_eq!(overrides.len(), 2);
+        assert_eq!(overrides.get("App1"), Some(&WritingMode::Formal));
+        assert_eq!(overrides.get("App2"), Some(&WritingMode::Excited));
+    }
+
+    #[test]
+    fn test_engine_clear_mode() {
+        let mut engine = WritingModeEngine::new(WritingMode::Casual);
+        engine.set_mode("Mail", WritingMode::Formal);
+        assert_eq!(engine.get_mode("Mail"), WritingMode::Formal);
+
+        engine.clear_mode("Mail");
+        assert_eq!(engine.get_mode("Mail"), WritingMode::Casual); // falls back to default
+    }
+
+    #[test]
+    fn test_engine_clear_nonexistent_mode() {
+        let mut engine = WritingModeEngine::new(WritingMode::Casual);
+        // clearing a mode that doesn't exist should be fine
+        engine.clear_mode("NonexistentApp");
+        assert_eq!(engine.get_mode("NonexistentApp"), WritingMode::Casual);
+    }
+
+    #[test]
+    fn test_style_observation_new() {
+        let obs = StyleObservation::new("TestApp".to_string());
+        assert_eq!(obs.app_name, "TestApp");
+        assert_eq!(obs.avg_caps_ratio, 0.0);
+        assert_eq!(obs.avg_punctuation_density, 0.0);
+        assert!(!obs.uses_exclamations);
+        assert_eq!(obs.sample_count, 0);
+    }
+
+    #[test]
+    fn test_style_observation_single_update() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        obs.update("Hello World!");
+
+        assert_eq!(obs.sample_count, 1);
+        assert!(obs.uses_exclamations);
+        assert!(obs.avg_caps_ratio > 0.0); // "Hello World" = 2/2 caps
+    }
+
+    #[test]
+    fn test_style_observation_rolling_average() {
+        let mut obs = StyleObservation::new("Test".to_string());
+
+        // first sample: all caps
+        obs.update("HELLO WORLD");
+        assert_eq!(obs.avg_caps_ratio, 1.0);
+
+        // second sample: no caps
+        obs.update("hello world");
+        // average should be 0.5
+        assert!((obs.avg_caps_ratio - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_style_observation_suggest_mode_not_enough_samples() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        obs.update("hello"); // only 1 sample
+
+        // need at least 2 samples
+        assert!(obs.suggest_mode().is_none());
+    }
+
+    #[test]
+    fn test_style_observation_suggest_very_casual() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        // low caps ratio, low punctuation
+        for _ in 0..5 {
+            obs.update("hey whats up no caps here");
+        }
+
+        let suggestion = obs.suggest_mode().unwrap();
+        assert_eq!(suggestion.suggested_mode, WritingMode::VeryCasual);
+    }
+
+    #[test]
+    fn test_style_observation_suggest_excited() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        // high caps ratio with exclamations
+        for _ in 0..5 {
+            obs.update("WOW THIS IS AMAZING!");
+        }
+
+        let suggestion = obs.suggest_mode().unwrap();
+        assert_eq!(suggestion.suggested_mode, WritingMode::Excited);
+    }
+
+    #[test]
+    fn test_style_observation_suggest_formal() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        // high caps ratio, high punctuation, no exclamations
+        for _ in 0..5 {
+            obs.update(
+                "Dear Sir, I Hope This Message Finds You Well. Best Regards, The Management Team.",
+            );
+        }
+
+        let suggestion = obs.suggest_mode().unwrap();
+        assert_eq!(suggestion.suggested_mode, WritingMode::Formal);
+    }
+
+    #[test]
+    fn test_style_observation_confidence_scales() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        for _ in 0..5 {
+            obs.update("hello");
+        }
+        let suggestion1 = obs.suggest_mode().unwrap();
+
+        for _ in 0..15 {
+            obs.update("hello");
+        }
+        let suggestion2 = obs.suggest_mode().unwrap();
+
+        // more samples = higher confidence
+        assert!(suggestion2.confidence > suggestion1.confidence);
+    }
+
+    #[test]
+    fn test_style_learner_new() {
+        let learner = StyleLearner::new();
+        assert!(learner.all_observations().is_empty());
+    }
+
+    #[test]
+    fn test_style_learner_default() {
+        let learner = StyleLearner::default();
+        assert!(learner.all_observations().is_empty());
+    }
+
+    #[test]
+    fn test_style_learner_observe() {
+        let mut learner = StyleLearner::new();
+        learner.observe("App1", "hello");
+        learner.observe("App1", "hi");
+        learner.observe("App2", "formal text here");
+
+        assert!(learner.get_observation("App1").is_some());
+        assert!(learner.get_observation("App2").is_some());
+        assert!(learner.get_observation("App3").is_none());
+
+        let obs = learner.get_observation("App1").unwrap();
+        assert_eq!(obs.sample_count, 2);
+    }
+
+    #[test]
+    fn test_style_learner_suggest_mode_not_enough_samples() {
+        let mut learner = StyleLearner::new();
+        learner.observe("App1", "hello"); // only 1 sample
+
+        assert!(learner.suggest_mode("App1").is_none());
+    }
+
+    #[test]
+    fn test_style_learner_suggest_mode_no_observations() {
+        let learner = StyleLearner::new();
+        assert!(learner.suggest_mode("NonexistentApp").is_none());
+    }
+
+    #[test]
+    fn test_caps_ratio_empty() {
+        assert_eq!(calculate_caps_ratio(""), 0.0);
+    }
+
+    #[test]
+    fn test_caps_ratio_whitespace() {
+        assert_eq!(calculate_caps_ratio("   "), 0.0);
+    }
+
+    #[test]
+    fn test_caps_ratio_mixed() {
+        // "Hello world Test" = 2/3 = 0.667
+        let ratio = calculate_caps_ratio("Hello world Test");
+        assert!((ratio - 2.0 / 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_punctuation_density_empty() {
+        assert_eq!(calculate_punctuation_density(""), 0.0);
+    }
+
+    #[test]
+    fn test_punctuation_density_multiple_types() {
+        // "Hello, world! How? Nice; ok:" = 5 punct in 28 bytes
+        // Note: text.len() returns bytes, not chars. For ASCII this is the same,
+        // but the original comment had wrong count (26 vs 28).
+        let density = calculate_punctuation_density("Hello, world! How? Nice; ok:");
+        let expected = 5.0 / 28.0 * 100.0; // ~17.86%
+        assert!((density - expected).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_writing_mode_suggestion_struct() {
+        let suggestion = WritingModeSuggestion {
+            app_name: "TestApp".to_string(),
+            suggested_mode: WritingMode::Casual,
+            confidence: 0.75,
+            based_on_samples: 15,
+        };
+
+        assert_eq!(suggestion.app_name, "TestApp");
+        assert_eq!(suggestion.suggested_mode, WritingMode::Casual);
+        assert!((suggestion.confidence - 0.75).abs() < 0.001);
+        assert_eq!(suggestion.based_on_samples, 15);
+    }
+
+    #[test]
+    fn test_writing_mode_all() {
+        let all_modes = WritingMode::all();
+        assert_eq!(all_modes.len(), 4);
+        assert!(all_modes.contains(&WritingMode::Formal));
+        assert!(all_modes.contains(&WritingMode::Casual));
+        assert!(all_modes.contains(&WritingMode::VeryCasual));
+        assert!(all_modes.contains(&WritingMode::Excited));
+    }
+
+    #[test]
+    fn test_writing_mode_default() {
+        assert_eq!(WritingMode::default(), WritingMode::Casual);
+    }
+
+    #[test]
+    fn test_writing_mode_serialization() {
+        // Test that modes serialize correctly for JSON
+        let mode = WritingMode::VeryCasual;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert!(json.contains("very_casual"));
+
+        let deserialized: WritingMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, WritingMode::VeryCasual);
+    }
+
+    #[test]
+    fn test_style_observation_serialization() {
+        let obs = StyleObservation::new("Test".to_string());
+        let json = serde_json::to_string(&obs).unwrap();
+        let deserialized: StyleObservation = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.app_name, "Test");
+    }
+
+    #[test]
+    fn test_engine_same_app_multiple_sets() {
+        let mut engine = WritingModeEngine::new(WritingMode::Casual);
+
+        engine.set_mode("App", WritingMode::Formal);
+        assert_eq!(engine.get_mode("App"), WritingMode::Formal);
+
+        engine.set_mode("App", WritingMode::Excited);
+        assert_eq!(engine.get_mode("App"), WritingMode::Excited);
+
+        engine.set_mode("App", WritingMode::VeryCasual);
+        assert_eq!(engine.get_mode("App"), WritingMode::VeryCasual);
+    }
+
+    #[test]
+    fn test_caps_ratio_unicode() {
+        // Unicode characters with uppercase
+        let ratio = calculate_caps_ratio("Café Résumé");
+        assert!(ratio > 0.0); // Both words start with uppercase
+    }
+
+    #[test]
+    fn test_style_analysis_unicode() {
+        // Should handle unicode without panicking
+        let mode = StyleAnalyzer::analyze_style("こんにちは世界");
+        // Result doesn't matter, just shouldn't panic
+        let _ = mode;
+    }
+
+    #[test]
+    fn test_style_observation_confidence_capped() {
+        let mut obs = StyleObservation::new("Test".to_string());
+        // Add lots of samples
+        for _ in 0..100 {
+            obs.update("hello");
+        }
+
+        let suggestion = obs.suggest_mode().unwrap();
+        // confidence should be capped at 1.0
+        assert!(suggestion.confidence <= 1.0);
     }
 }

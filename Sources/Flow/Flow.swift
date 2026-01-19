@@ -763,5 +763,114 @@ public final class Flow: @unchecked Sendable {
         return CloudTranscriptionProvider(rawValue: rawValue)
     }
 
+    // MARK: - Alignment and Edit Detection
+
+    /// Align original and edited text, extract correction candidates
+    /// Uses Needleman-Wunsch algorithm with word-level scoring
+    /// - Parameters:
+    ///   - original: The original text
+    ///   - edited: The edited text
+    /// - Returns: JSON string with alignment result, or nil on error
+    public func alignAndExtractCorrections(original: String, edited: String) -> String? {
+        let result = original.withCString { cOriginal in
+            edited.withCString { cEdited in
+                flow_align_and_extract_corrections(cOriginal, cEdited)
+            }
+        }
+
+        guard let cString = result else { return nil }
+        let string = String(cString: cString)
+        flow_free_string(cString)
+        return string
+    }
+
+    /// Get dictionary context for ASR vocabulary prompting
+    /// - Parameter limit: Maximum number of words to return
+    /// - Returns: Array of high-confidence learned words
+    public func getDictionaryContext(limit: Int = 100) -> [String] {
+        guard let handle = handle else { return [] }
+        guard let cString = flow_get_dictionary_context(handle, UInt32(limit)) else { return [] }
+        let jsonString = String(cString: cString)
+        flow_free_string(cString)
+
+        guard let data = jsonString.data(using: .utf8),
+              let words = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return words
+    }
+
+    /// Save edit analytics for tracking alignment patterns
+    /// - Parameters:
+    ///   - wordEditVector: The word-level edit vector (e.g., "MMSMM")
+    ///   - punctEditVector: The punctuation edit vector
+    ///   - original: The original text (optional)
+    ///   - edited: The edited text (optional)
+    /// - Returns: true on success
+    @discardableResult
+    public func saveEditAnalytics(
+        wordEditVector: String,
+        punctEditVector: String?,
+        original: String?,
+        edited: String?
+    ) -> Bool {
+        guard let handle = handle else { return false }
+
+        return wordEditVector.withCString { cWordVec in
+            let punctPtr = punctEditVector.map { $0.withCString { $0 } }
+            let origPtr = original.map { $0.withCString { $0 } }
+            let editPtr = edited.map { $0.withCString { $0 } }
+
+            return flow_save_edit_analytics(
+                handle,
+                cWordVec,
+                punctPtr ?? nil,
+                origPtr ?? nil,
+                editPtr ?? nil
+            )
+        }
+    }
+
+    /// Save a learned words session for undo functionality
+    /// - Parameter words: Array of words that were learned
+    /// - Returns: Session ID (or -1 on error)
+    @discardableResult
+    public func saveLearnedWordsSession(words: [String]) -> Int64 {
+        guard let handle = handle else { return -1 }
+
+        guard let jsonData = try? JSONEncoder().encode(words),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return -1
+        }
+
+        return jsonString.withCString { cJson in
+            flow_save_learned_words_session(handle, cJson)
+        }
+    }
+
+    /// Undo the most recent learned words session
+    /// - Returns: true if undo was performed
+    @discardableResult
+    public func undoLearnedWords() -> Bool {
+        guard let handle = handle else { return false }
+        return flow_undo_learned_words(handle)
+    }
+
+    /// Get the most recent undoable learned words
+    /// - Returns: Array of words, or nil if no undoable session exists
+    public func getUndoableLearnedWords() -> [String]? {
+        guard let handle = handle else { return nil }
+        guard let cString = flow_get_undoable_learned_words(handle) else { return nil }
+
+        let jsonString = String(cString: cString)
+        flow_free_string(cString)
+
+        guard let data = jsonString.data(using: .utf8),
+              let words = try? JSONDecoder().decode([String].self, from: data) else {
+            return nil
+        }
+        return words
+    }
+
     // Configuration persistence is handled in the core database.
 }

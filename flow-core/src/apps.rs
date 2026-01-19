@@ -372,22 +372,4 @@ mod tests {
         let history = tracker.recent_history(10);
         assert_eq!(history.len(), 2);
     }
-
-    #[test]
-    fn test_suggested_modes() {
-        let registry = AppRegistry::new();
-
-        assert_eq!(
-            registry.suggested_mode(AppCategory::Email),
-            WritingMode::Formal
-        );
-        assert_eq!(
-            registry.suggested_mode(AppCategory::Social),
-            WritingMode::VeryCasual
-        );
-        assert_eq!(
-            registry.suggested_mode(AppCategory::Slack),
-            WritingMode::Casual
-        );
-    }
 }
