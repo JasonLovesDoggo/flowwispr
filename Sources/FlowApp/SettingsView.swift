@@ -362,6 +362,7 @@ private extension CompletionProvider {
 
 private struct GeneralSection: View {
     @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @AppStorage("audioFeedbackEnabled") private var audioFeedbackEnabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: FW.spacing12) {
@@ -370,6 +371,7 @@ private struct GeneralSection: View {
 
             VStack(spacing: FW.spacing16) {
                 FWToggle(isOn: $launchAtLogin, label: "Launch at login")
+                FWToggle(isOn: $audioFeedbackEnabled, label: "Audio feedback")
             }
             .fwSection()
         }

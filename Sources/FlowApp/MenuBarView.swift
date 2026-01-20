@@ -13,10 +13,17 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack {
+            if !appState.isAccessibilityEnabled {
+                Button("Enable Accessibility (Required for Hotkey)") {
+                    appState.requestAccessibilityPermission()
+                }
+                Divider()
+            }
+
             Button(appState.isRecording ? "Stop Recording (\(appState.hotkey.displayName))" : "Start Recording (\(appState.hotkey.displayName))") {
                 appState.toggleRecording()
             }
-            .disabled(!appState.isConfigured)
+            .disabled(!appState.isConfigured || !appState.isAccessibilityEnabled)
 
             Divider()
 

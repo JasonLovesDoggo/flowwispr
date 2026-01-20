@@ -79,7 +79,6 @@ final class AppState: ObservableObject {
     private var pendingModifierCapture: Hotkey.ModifierKey?
     private var appActiveObserver: NSObjectProtocol?
     private var appInactiveObserver: NSObjectProtocol?
-    private var mediaPauseState = MediaPauseState()
     private var recordingIndicator: RecordingIndicatorWindow?
     private var targetApplication: NSRunningApplication?
     private let volumeManager = VolumeManager()
@@ -94,6 +93,11 @@ final class AppState: ObservableObject {
         self.hotkey = Hotkey.load()
         self.isOnboardingComplete = UserDefaults.standard.bool(forKey: Self.onboardingKey)
         self.isAccessibilityEnabled = GlobeKeyHandler.isAccessibilityAuthorized()
+
+        if !isAccessibilityEnabled {
+            log("⚠️ [INIT] Accessibility NOT enabled - hotkey will not work globally!")
+            log("⚠️ [INIT] Grant permission in System Settings > Privacy & Security > Accessibility")
+        }
 
         setupGlobeKey()
         setupLifecycleObserver()
@@ -132,8 +136,9 @@ final class AppState: ObservableObject {
     // MARK: - Globe Key
 
     private func setupGlobeKey() {
-        globeKeyHandler = GlobeKeyHandler(hotkey: hotkey) { trigger in
-            Task { @MainActor [weak self] in
+        globeKeyHandler = GlobeKeyHandler(hotkey: hotkey) { [weak self] trigger in
+            // CGEventTap callback is already on main thread; avoid Task overhead for instant response
+            DispatchQueue.main.async {
                 self?.handleHotkeyTrigger(trigger)
             }
         }
@@ -431,6 +436,19 @@ final class AppState: ObservableObject {
     }
 
     func startRecording() {
+        let totalStart = CFAbsoluteTimeGetCurrent()
+
+        // Refresh accessibility status before recording
+        var t0 = CFAbsoluteTimeGetCurrent()
+        refreshAccessibilityStatus()
+        log("⏱️ [TIMING] refreshAccessibilityStatus: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms")
+
+        guard isAccessibilityEnabled else {
+            errorMessage = "Accessibility permission required for hotkey. Enable in System Settings > Privacy & Security > Accessibility."
+            log("⚠️ [RECORDING] Blocked - Accessibility not enabled")
+            return
+        }
+
         guard engine.isConfigured else {
             errorMessage = "Please configure your API key in Settings"
             return
@@ -438,61 +456,71 @@ final class AppState: ObservableObject {
 
         targetApplication = NSWorkspace.shared.frontmostApplication
 
-        // Extract text field context (selected text, cursor position)
-        textFieldContext = AccessibilityContext.extractFocusedTextContext()
-        if let context = textFieldContext?.contextSummary {
-            log("📝 [CONTEXT] Extracted text context:\n\(context)")
-        }
-
-        // Extract IDE context (file names, code symbols)
-        ideContext = AccessibilityContext.extractIDEContext()
-        if let ide = ideContext {
-            log("💻 [IDE] Extracted IDE context:\n\(ide.summary)")
-        }
-
         log("🎤 [RECORDING] Starting recording - App: \(currentApp), Mode: \(currentMode.displayName)")
-        pauseMediaPlayback()
-        volumeManager.muteForRecording()
 
-        // Play start sound before beginning (so user hears feedback even if mic mutes speakers)
+        // Update UI immediately for instant feedback
+        isRecording = true
+        isProcessing = false
+        updateRecordingIndicatorVisibility()
+        recordingDuration = 0
+        log("⏱️ [TIMING] UI updated: \(Int((CFAbsoluteTimeGetCurrent() - totalStart) * 1000))ms")
+
+        // Play start sound
         AudioFeedback.shared.playStart()
 
-        if engine.startRecording() {
-            isRecording = true
-            isProcessing = false
-            updateRecordingIndicatorVisibility()
-            recordingDuration = 0
-            log("✅ [RECORDING] Recording started successfully")
+        // Start engine and setup timers in a task so UI can update first
+        Task { @MainActor [weak self] in
+            guard let self else { return }
 
-            Analytics.shared.track("Recording Started", eventProperties: [
-                "app_name": currentApp,
-                "app_category": currentCategory.rawValue,
-                "writing_mode": currentMode.rawValue
-            ])
+            let t = CFAbsoluteTimeGetCurrent()
+            self.volumeManager.muteForRecording()
+            self.log("⏱️ [TIMING] muteForRecording: \(Int((CFAbsoluteTimeGetCurrent() - t) * 1000))ms")
 
-            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.isRecording else { return }
-                    self.recordingDuration += 100
+            let engineStart = CFAbsoluteTimeGetCurrent()
+            if self.engine.startRecording() {
+                self.log("⏱️ [TIMING] engine.startRecording: \(Int((CFAbsoluteTimeGetCurrent() - engineStart) * 1000))ms")
+                self.log("⏱️ [TIMING] TOTAL: \(Int((CFAbsoluteTimeGetCurrent() - totalStart) * 1000))ms")
+
+                // Extract context in background
+                Task.detached { [weak self] in
+                    let textContext = AccessibilityContext.extractFocusedTextContext()
+                    let ide = AccessibilityContext.extractIDEContext()
+                    await MainActor.run {
+                        self?.textFieldContext = textContext
+                        self?.ideContext = ide
+                    }
                 }
-            }
 
-            audioLevelTimer = Timer.scheduledTimer(withTimeInterval: 1/30, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.isRecording else { return }
-                    let newLevel = self.engine.audioLevel
-                    self.audioLevel = newLevel
-                    // Smooth the audio level with exponential moving average
-                    // Higher smoothing factor = smoother but slower response
-                    let smoothingFactor: Float = 0.3
-                    self.smoothedAudioLevel = self.smoothedAudioLevel * (1 - smoothingFactor) + newLevel * smoothingFactor
+                Analytics.shared.track("Recording Started", eventProperties: [
+                    "app_name": self.currentApp,
+                    "app_category": self.currentCategory.rawValue,
+                    "writing_mode": self.currentMode.rawValue
+                ])
+
+                self.recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isRecording else { return }
+                        self.recordingDuration += 100
+                    }
                 }
+
+                self.audioLevelTimer = Timer.scheduledTimer(withTimeInterval: 1/30, repeats: true) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isRecording else { return }
+                        let newLevel = self.engine.audioLevel
+                        self.audioLevel = newLevel
+                        let smoothingFactor: Float = 0.8
+                        self.smoothedAudioLevel = self.smoothedAudioLevel * (1 - smoothingFactor) + newLevel * smoothingFactor
+                    }
+                }
+            } else {
+                // Revert UI state
+                self.isRecording = false
+                self.updateRecordingIndicatorVisibility()
+                self.errorMessage = self.engine.lastError ?? "Failed to start recording"
+                AudioFeedback.shared.playError()
+                self.volumeManager.restoreAfterRecording()
             }
-        } else {
-            errorMessage = engine.lastError ?? "Failed to start recording"
-            AudioFeedback.shared.playError()
-            volumeManager.restoreAfterRecording()
-            resumeMediaPlayback()
         }
     }
 
@@ -515,12 +543,6 @@ final class AppState: ObservableObject {
         // Restore volume immediately (was muted to prevent feedback)
         volumeManager.restoreAfterRecording()
 
-        log("⏳ [RESUME] Scheduling music resume in 1.95s...")
-        // Wait 1.95s before resuming music to let CoreAudio settle after mic release
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.95) { [weak self] in
-            self?.log("▶️ [RESUME] Resuming music playback")
-            self?.resumeMediaPlayback()
-        }
 
         if duration > 0 {
             log("✅ [RECORDING] Recording stopped successfully - Duration: \(duration)ms")
@@ -802,61 +824,4 @@ final class AppState: ObservableObject {
         (engine.stats?["total_words_dictated"] as? Int) ?? 0
     }
 
-    private struct MediaPauseState {
-        var musicWasPlaying = false
-        var spotifyWasPlaying = false
-    }
-
-    private func pauseMediaPlayback() {
-        mediaPauseState.musicWasPlaying = pauseIfPlaying(app: "Music")
-        mediaPauseState.spotifyWasPlaying = pauseIfPlaying(app: "Spotify")
-    }
-
-    private func resumeMediaPlayback() {
-        if mediaPauseState.musicWasPlaying {
-            resumeApp(app: "Music")
-        }
-        if mediaPauseState.spotifyWasPlaying {
-            resumeApp(app: "Spotify")
-        }
-        mediaPauseState = MediaPauseState()
-    }
-
-    private func pauseIfPlaying(app: String) -> Bool {
-        let script = """
-        tell application \"\(app)\"
-            if it is running then
-                if player state is playing then
-                    pause
-                    return \"playing\"
-                end if
-            end if
-        end tell
-        return \"\"
-        """
-
-        return runAppleScript(script) == "playing"
-    }
-
-    private func resumeApp(app: String) {
-        let script = """
-        tell application \"\(app)\"
-            if it is running then
-                play
-            end if
-        end tell
-        """
-
-        _ = runAppleScript(script)
-    }
-
-    private func runAppleScript(_ script: String) -> String? {
-        guard let appleScript = NSAppleScript(source: script) else { return nil }
-        var error: NSDictionary?
-        let result = appleScript.executeAndReturnError(&error)
-        if error != nil {
-            return nil
-        }
-        return result.stringValue
-    }
 }

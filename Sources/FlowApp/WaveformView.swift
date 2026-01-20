@@ -22,7 +22,7 @@ struct WaveformView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30)) { _ in
+        TimelineView(.animation(minimumInterval: 1/107)) { _ in
             Canvas { context, size in
                 let barWidth: CGFloat = 1.5
                 let gap: CGFloat = 2.5

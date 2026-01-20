@@ -41,6 +41,8 @@ final class RecordingIndicatorWindow {
         // Small delay to ensure layout is settled before animating
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
             guard let self else { return }
+            // Reposition after layout settles to fix first-show centering
+            self.positionWindow()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.35
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)

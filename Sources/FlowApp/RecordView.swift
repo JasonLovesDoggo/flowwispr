@@ -175,7 +175,7 @@ struct RecordView: View {
                 .padding(.horizontal, FW.spacing16)
 
             // Big record button
-            Button(action: { appState.toggleRecording() }) {
+            ZStack {
                 if appState.isRecording {
                     HStack(spacing: FW.spacing12) {
                         Image(systemName: "stop.fill")
@@ -189,8 +189,7 @@ struct RecordView: View {
                         .font(.system(size: 18, weight: .semibold))
                 }
             }
-            .frame(width: 200)
-            .frame(height: 52)
+            .frame(width: 200, height: 52)
             .foregroundStyle(appState.isRecording ? .white : FW.textPrimary)
             .background {
                 RoundedRectangle(cornerRadius: FW.radiusLarge)
@@ -200,7 +199,9 @@ struct RecordView: View {
                 RoundedRectangle(cornerRadius: FW.radiusLarge)
                     .strokeBorder(appState.isRecording ? FW.danger : FW.accent, lineWidth: 2)
             }
-            .buttonStyle(.plain)
+            .onTapGesture {
+                appState.toggleRecording()
+            }
 
             // Shortcut hint
             if case .globe = appState.hotkey.kind {

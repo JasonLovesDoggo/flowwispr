@@ -4,9 +4,11 @@
 //
 // Provides audio feedback sounds for recording start/stop events.
 // Uses system sounds for immediate, non-jarring feedback.
+// Disabled by default - can be enabled in Settings.
 //
 
 import AppKit
+import SwiftUI
 
 /// Plays audio feedback for recording events
 final class AudioFeedback {
@@ -16,32 +18,37 @@ final class AudioFeedback {
     private var stopSound: NSSound?
     private var errorSound: NSSound?
 
-    /// Whether audio feedback is enabled (can be user-configurable later)
-    var isEnabled = true
+    /// Key for storing the audio feedback setting
+    private static let enabledKey = "audioFeedbackEnabled"
+
+    /// Whether audio feedback is enabled (defaults to OFF - user found clicking sounds annoying)
+    static var isEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: enabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
+    }
 
     private init() {
-        // Use system sounds - "Tink" for start (subtle), "Pop" for stop (slightly more noticeable)
-        // These are reliable system sounds that don't require bundling audio files
-        startSound = NSSound(named: "Tink")
-        stopSound = NSSound(named: "Pop")
+        // Use softer system sounds - Blow/Glass are gentler than Tink/Pop clicking sounds
+        startSound = NSSound(named: "Blow")
+        stopSound = NSSound(named: "Glass")
         errorSound = NSSound(named: "Basso")
     }
 
     /// Play the recording start sound
     func playStart() {
-        guard isEnabled else { return }
+        guard Self.isEnabled else { return }
         startSound?.play()
     }
 
     /// Play the recording stop sound
     func playStop() {
-        guard isEnabled else { return }
+        guard Self.isEnabled else { return }
         stopSound?.play()
     }
 
     /// Play error sound (e.g., paste failed, transcription failed)
     func playError() {
-        guard isEnabled else { return }
+        guard Self.isEnabled else { return }
         errorSound?.play()
     }
 }

@@ -19,7 +19,6 @@ final class GlobeKeyHandler {
         case toggle
     }
 
-    private let fnHoldDelaySeconds: TimeInterval = 0.06
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var onHotkeyTriggered: (@Sendable (Trigger) -> Void)?
@@ -27,11 +26,11 @@ final class GlobeKeyHandler {
 
     private var isFunctionDown = false
     private var functionUsedAsModifier = false
-    private var pendingFnTrigger: DispatchWorkItem?
+    private var hasFiredFnPressed = false
 
     private var isModifierDown = false
     private var modifierUsedAsModifier = false
-    private var pendingModifierTrigger: DispatchWorkItem?
+    private var hasFiredModifierPressed = false
 
     // Resilience: track tap restarts to avoid infinite loops
     private var tapRestartCount = 0
@@ -59,12 +58,10 @@ final class GlobeKeyHandler {
         // Reset state for Fn/modifier-only modes
         isFunctionDown = false
         functionUsedAsModifier = false
-        pendingFnTrigger?.cancel()
-        pendingFnTrigger = nil
+        hasFiredFnPressed = false
         isModifierDown = false
         modifierUsedAsModifier = false
-        pendingModifierTrigger?.cancel()
-        pendingModifierTrigger = nil
+        hasFiredModifierPressed = false
     }
 
     @discardableResult
@@ -127,8 +124,6 @@ final class GlobeKeyHandler {
                     // kVK_Function = 63
                     if keycode != 63 {
                         functionUsedAsModifier = true
-                        pendingFnTrigger?.cancel()
-                        pendingFnTrigger = nil
                     }
                 }
             default:
@@ -141,8 +136,6 @@ final class GlobeKeyHandler {
             case .keyDown:
                 if isModifierDown {
                     modifierUsedAsModifier = true
-                    pendingModifierTrigger?.cancel()
-                    pendingModifierTrigger = nil
                 }
             default:
                 break
@@ -190,24 +183,19 @@ final class GlobeKeyHandler {
         if hasFn {
             isFunctionDown = true
             functionUsedAsModifier = false
-            pendingFnTrigger?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, self.isFunctionDown, !self.functionUsedAsModifier else { return }
-                self.fireHotkey(.pressed)
-            }
-            pendingFnTrigger = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + fnHoldDelaySeconds, execute: workItem)
+            hasFiredFnPressed = true
+            // Fire immediately - no delay for instant response
+            fireHotkey(.pressed)
             return
         }
 
         guard isFunctionDown else { return }
         isFunctionDown = false
-        pendingFnTrigger?.cancel()
-        pendingFnTrigger = nil
 
-        if !functionUsedAsModifier {
+        if hasFiredFnPressed && !functionUsedAsModifier {
             fireHotkey(.released)
         }
+        hasFiredFnPressed = false
     }
 
     private func handleModifierFlagChange(_ event: CGEvent, modifier: Hotkey.ModifierKey) {
@@ -220,8 +208,6 @@ final class GlobeKeyHandler {
             // If the modifier is still down but other modifiers changed, mark as used
             if isModifierDown && otherModifiersPressed {
                 modifierUsedAsModifier = true
-                pendingModifierTrigger?.cancel()
-                pendingModifierTrigger = nil
             }
             return
         }
@@ -234,25 +220,20 @@ final class GlobeKeyHandler {
             }
             isModifierDown = true
             modifierUsedAsModifier = false
-            pendingModifierTrigger?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, self.isModifierDown, !self.modifierUsedAsModifier else { return }
-                self.fireHotkey(.pressed)
-            }
-            pendingModifierTrigger = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + fnHoldDelaySeconds, execute: workItem)
+            hasFiredModifierPressed = true
+            // Fire immediately - no delay for instant response
+            fireHotkey(.pressed)
             return
         }
 
         // Modifier released
         guard isModifierDown else { return }
         isModifierDown = false
-        pendingModifierTrigger?.cancel()
-        pendingModifierTrigger = nil
 
-        if !modifierUsedAsModifier {
+        if hasFiredModifierPressed && !modifierUsedAsModifier {
             fireHotkey(.released)
         }
+        hasFiredModifierPressed = false
     }
 
     private func hasOtherModifiers(_ flags: CGEventFlags, excluding: Hotkey.ModifierKey) -> Bool {
