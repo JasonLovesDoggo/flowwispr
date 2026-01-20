@@ -1,7 +1,7 @@
-//! Base10 provider for Whisper transcription + OpenRouter completion
+//! Auto provider for Whisper transcription + completion
 //!
 //! Combined transcription and completion in a single worker request.
-//! API keys handled by Cloudflare Worker secrets.
+//! The worker handles provider selection (Cloudflare AI or Base10) internally.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -14,11 +14,11 @@ use crate::error::{Error, Result};
 
 use super::{TranscriptionProvider, TranscriptionRequest, TranscriptionResponse};
 
-const BASE10_PROXY_URL: &str = "https://base10-proxy.test-j.workers.dev";
-const BASE10_VALIDATE_URL: &str = "https://base10-proxy.test-j.workers.dev/validate-corrections";
+const FLOW_WORKER_URL: &str = "https://flow-worker.test-j.workers.dev";
+const FLOW_WORKER_VALIDATE_URL: &str = "https://flow-worker.test-j.workers.dev/validate-corrections";
 
 /// Base10 transcription provider (with integrated completion)
-pub struct Base10TranscriptionProvider {
+pub struct AutoTranscriptionProvider {
     client: Client,
 }
 
@@ -67,7 +67,7 @@ pub async fn validate_corrections(
     );
 
     let response = client
-        .post(BASE10_VALIDATE_URL)
+        .post(FLOW_WORKER_VALIDATE_URL)
         .json(&request)
         .send()
         .await?;
@@ -86,7 +86,7 @@ pub async fn validate_corrections(
     Ok(validation_response.results)
 }
 
-impl Base10TranscriptionProvider {
+impl AutoTranscriptionProvider {
     pub fn new(_api_key: Option<String>) -> Self {
         Self {
             client: Client::new(),
@@ -135,7 +135,7 @@ struct WorkerResponse {
 }
 
 #[async_trait]
-impl TranscriptionProvider for Base10TranscriptionProvider {
+impl TranscriptionProvider for AutoTranscriptionProvider {
     fn name(&self) -> &'static str {
         "Auto (Cloud)"
     }
@@ -171,7 +171,7 @@ impl TranscriptionProvider for Base10TranscriptionProvider {
 
         let response = self
             .client
-            .post(BASE10_PROXY_URL)
+            .post(FLOW_WORKER_URL)
             .json(&worker_request)
             .send()
             .await?;
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_provider_always_configured() {
-        let provider = Base10TranscriptionProvider::new(None);
+        let provider = AutoTranscriptionProvider::new(None);
         assert!(provider.is_configured());
     }
 }
