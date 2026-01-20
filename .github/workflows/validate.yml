@@ -33,6 +33,19 @@ jobs:
           cd flow-core
           cargo build
 
+      - name: Verify C header is up-to-date
+        run: |
+          # Check that the generated header matches what's in the repo
+          if ! git diff --quiet Sources/CFlow/include/flow.h; then
+            echo "ERROR: C header is out of sync with Rust FFI"
+            echo "Generated header differs from committed version."
+            echo "This likely means new FFI functions were added without updating the header."
+            echo ""
+            echo "Differences:"
+            git diff Sources/CFlow/include/flow.h
+            exit 1
+          fi
+
       - name: Build Swift package
         run: |
           swift build
