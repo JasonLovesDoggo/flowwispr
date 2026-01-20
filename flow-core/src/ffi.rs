@@ -25,7 +25,7 @@ use crate::learning::LearningEngine;
 use crate::macos_messages::MessagesDetector;
 use crate::modes::{StyleLearner, WritingMode, WritingModeEngine};
 use crate::providers::{
-    Base10TranscriptionProvider, CompletionProvider, GeminiCompletionProvider,
+    AutoTranscriptionProvider, CompletionProvider, GeminiCompletionProvider,
     GeminiTranscriptionProvider, LocalWhisperTranscriptionProvider, OpenAICompletionProvider,
     OpenAITranscriptionProvider, OpenRouterCompletionProvider, TranscriptionCompletionParams,
     TranscriptionProvider, TranscriptionRequest, WhisperModel,
@@ -200,7 +200,7 @@ fn load_persisted_configuration(handle: &mut FlowHandle) {
         // Local whisper will be initialized by flow_set_transcription_mode
         // For now, set a placeholder that will be replaced
         debug!("Local transcription enabled, will be initialized separately");
-        handle.transcription = Arc::new(Base10TranscriptionProvider::new(None));
+        handle.transcription = Arc::new(AutoTranscriptionProvider::new(None));
     } else {
         // Cloud transcription - check which provider
         match saved_cloud_transcription.as_deref() {
@@ -211,7 +211,7 @@ fn load_persisted_configuration(handle: &mut FlowHandle) {
             _ => {
                 // Default to Auto (worker handles transcription + completion)
                 debug!("Using Auto transcription provider (default)");
-                handle.transcription = Arc::new(Base10TranscriptionProvider::new(None));
+                handle.transcription = Arc::new(AutoTranscriptionProvider::new(None));
             }
         }
     }
@@ -1150,7 +1150,7 @@ pub extern "C" fn flow_free_string(s: *mut c_char) {
 pub extern "C" fn flow_is_configured(handle: *mut FlowHandle) -> bool {
     let handle = unsafe { &*handle };
 
-    // Base10 ("Auto (Cloud)") handles both transcription and completion internally,
+    // Auto provider handles both transcription and completion internally via the worker,
     // so we don't need a separate completion provider configured
     if handle.transcription.name() == "Auto (Cloud)" {
         return handle.transcription.is_configured();
@@ -1708,7 +1708,7 @@ pub extern "C" fn flow_set_transcription_mode(
             }
             _ => {
                 // Default to Auto (worker handles transcription + completion)
-                handle.transcription = Arc::new(Base10TranscriptionProvider::new(None));
+                handle.transcription = Arc::new(AutoTranscriptionProvider::new(None));
                 debug!("Enabled Auto transcription (worker handles everything)");
             }
         }
