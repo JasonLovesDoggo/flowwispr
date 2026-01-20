@@ -1,6 +1,6 @@
-name = "base10-proxy"
+name = "flow-worker"
 main = "build/worker/shim.mjs"
-ccompatibility_flags = [ "nodejs_compat" ]
+compatibility_flags = [ "nodejs_compat" ]
 compatibility_date = "2024-09-23"
 
 [build]
@@ -8,6 +8,9 @@ command = "cargo install -q worker-build && worker-build --release"
 
 [ai]
 binding = "AI"
+
+[vars]
+TRANSCRIPTION_PROVIDER = "cloudflare"
 
 [observability]
 [observability.logs]
