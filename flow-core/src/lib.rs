@@ -25,6 +25,9 @@ pub mod whisper_models;
 pub use error::{Error, Result};
 pub use types::*;
 
+// Export FFI functions at crate root for cbindgen code generation
+pub use ffi::*;
+
 /// Re-export the main engine components for convenience
 pub use alignment::{AlignmentResult, AlignmentStep, WordLabel, parse_alignment_steps};
 pub use apps::{AppRegistry, AppTracker};

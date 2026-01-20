@@ -220,8 +220,14 @@ fn load_persisted_configuration(handle: &mut FlowHandle) {
 // ============ Lifecycle ============
 
 /// Initialize the Flow engine
-/// Returns an opaque handle that must be passed to all other functions
-/// Returns null on failure
+///
+/// Returns an opaque handle that must be passed to all other functions.
+///
+/// # Arguments
+/// - `db_path` - Path to the SQLite database file, or NULL for default location
+///
+/// # Returns
+/// Opaque handle to the engine, or NULL on failure
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_init(db_path: *const c_char) -> *mut FlowHandle {
     let db_path = if db_path.is_null() {
@@ -432,8 +438,14 @@ pub extern "C" fn flow_start_recording(handle: *mut FlowHandle) -> bool {
 }
 
 /// Stop audio recording and get the duration
-/// Returns duration in milliseconds, or 0 on failure
-/// This function extracts audio data and fully releases the microphone device
+///
+/// This function extracts audio data and fully releases the microphone device.
+///
+/// # Arguments
+/// - `handle` - Engine handle
+///
+/// # Returns
+/// Duration in milliseconds, or 0 on failure
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_stop_recording(handle: *mut FlowHandle) -> u64 {
     let handle = unsafe { &*handle };
@@ -648,8 +660,13 @@ fn transcribe_with_audio(
 }
 
 /// Transcribe the recorded audio and process it
-/// Returns the processed text (caller must free with flow_free_string)
-/// Returns null on failure
+///
+/// # Arguments
+/// - `handle` - Engine handle
+/// - `app_name` - Name of the current app (for mode selection), or NULL
+///
+/// # Returns
+/// Processed text (caller must free with flow_free_string), or NULL on failure
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_transcribe(handle: *mut FlowHandle, app_name: *const c_char) -> *mut c_char {
     let handle = unsafe { &*handle };
@@ -778,7 +795,14 @@ pub extern "C" fn flow_retry_last_transcription(
 // ============ Shortcuts ============
 
 /// Add a voice shortcut
-/// Returns true on success
+///
+/// # Arguments
+/// - `handle` - Engine handle
+/// - `trigger` - Trigger phrase
+/// - `replacement` - Replacement text
+///
+/// # Returns
+/// true on success
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_add_shortcut(
     handle: *mut FlowHandle,
@@ -841,8 +865,14 @@ pub extern "C" fn flow_shortcut_count(handle: *mut FlowHandle) -> usize {
 // ============ Writing Modes ============
 
 /// Set the writing mode for an app
-/// mode: 0 = Formal, 1 = Casual, 2 = VeryCasual, 3 = Excited
-/// Returns true on success
+///
+/// # Arguments
+/// - `handle` - Engine handle
+/// - `app_name` - Name of the app
+/// - `mode` - Writing mode (0=Formal, 1=Casual, 2=VeryCasual, 3=Excited)
+///
+/// # Returns
+/// true on success
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_set_app_mode(
     handle: *mut FlowHandle,
@@ -906,7 +936,14 @@ pub extern "C" fn flow_get_app_mode(handle: *mut FlowHandle, app_name: *const c_
 // ============ Learning ============
 
 /// Report a user edit to learn from
-/// Returns true on success
+///
+/// # Arguments
+/// - `handle` - Engine handle
+/// - `original` - Original transcribed text
+/// - `edited` - Text after user edits
+///
+/// # Returns
+/// true on success
 #[unsafe(no_mangle)]
 pub extern "C" fn flow_learn_from_edit(
     handle: *mut FlowHandle,

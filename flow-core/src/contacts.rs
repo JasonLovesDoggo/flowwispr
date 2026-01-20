@@ -298,210 +298,413 @@ impl Default for ContactClassifier {
 mod tests {
     use super::*;
 
+    /// Comprehensive test for all partner classification scenarios:
+    /// - All partner keywords (bae, hubby, wife, etc.)
+    /// - All romantic emojis (❤️, 💕, 💍, etc.)
+    /// - Partner indicators override organization field
+    /// - Partner priority over family indicators
+    /// - Case insensitivity
     #[test]
     fn test_partner_classification() {
         let classifier = ContactClassifier::new();
 
-        let cases = vec![
-            ContactInput {
-                name: "Bae".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "❤️ Alex".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "My Love".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Hubby 💍".to_string(),
-                organization: String::new(),
-            },
+        // All partner keywords must be detected
+        let partner_keywords = [
+            "bae", "hubby", "wife", "wifey", "husband", "my love", "baby", "babe", "love",
+            "honey", "sweetheart", "darling", "dear", "sweetie", "boo",
         ];
-
-        for case in cases {
+        for keyword in partner_keywords {
+            let input = ContactInput {
+                name: keyword.to_string(),
+                organization: String::new(),
+            };
             assert_eq!(
-                classifier.classify(&case),
+                classifier.classify(&input),
                 ContactCategory::Partner,
-                "Failed for: {}",
-                case.name
+                "Partner keyword '{}' not detected",
+                keyword
             );
         }
-    }
 
-    #[test]
-    fn test_partner_overrides_organization() {
-        let classifier = ContactClassifier::new();
-
-        // CRITICAL: Partner indicators must override organization field
-        let cases = vec![
-            ContactInput {
-                name: "Bae".to_string(),
-                organization: "Acme Corp".to_string(),
-            },
-            ContactInput {
-                name: "❤️ Alex".to_string(),
-                organization: "Tech Inc".to_string(),
-            },
-            ContactInput {
-                name: "My Love".to_string(),
-                organization: "Business LLC".to_string(),
-            },
-            ContactInput {
-                name: "Hubby 💍".to_string(),
-                organization: "Company XYZ".to_string(),
-            },
+        // All romantic emojis must be detected
+        let partner_emojis = [
+            '❤', '💕', '💖', '💗', '💘', '💝', '💞', '💟', '💙', '💚', '💛', '🧡', '💜', '🖤',
+            '🤍', '🤎', '💋', '💍', '💑', '💏', '👩', '👨', '❣',
         ];
-
-        for case in cases {
+        for emoji in partner_emojis {
+            let input = ContactInput {
+                name: format!("Alex {}", emoji),
+                organization: String::new(),
+            };
             assert_eq!(
-                classifier.classify(&case),
+                classifier.classify(&input),
                 ContactCategory::Partner,
-                "Partner detection MUST override organization field. Failed for: {} at {}",
-                case.name,
-                case.organization
+                "Partner emoji '{}' not detected",
+                emoji
             );
         }
+
+        // Partner MUST override organization field (critical business logic)
+        let override_cases = [
+            ("Bae", "Acme Corp"),
+            ("❤️ Alex", "Tech Inc"),
+            ("My Love", "Business LLC"),
+            ("Hubby 💍", "Company XYZ"),
+        ];
+        for (name, org) in override_cases {
+            let input = ContactInput {
+                name: name.to_string(),
+                organization: org.to_string(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::Partner,
+                "Partner MUST override organization. Failed: '{}' at '{}'",
+                name,
+                org
+            );
+        }
+
+        // Partner takes priority over family indicators
+        let input = ContactInput {
+            name: "❤️ Mom".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::Partner);
+
+        // Case insensitivity
+        for name in ["BAE", "Bae", "bae", "BAe"] {
+            let input = ContactInput {
+                name: name.to_string(),
+                organization: String::new(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::Partner,
+                "Case insensitivity failed for '{}'",
+                name
+            );
+        }
+
+        // Emoji-only names with partner emojis
+        let input = ContactInput {
+            name: "❤️💕💖".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::Partner);
     }
 
+    /// Comprehensive test for all family classification scenarios:
+    /// - All family keywords (mom, dad, grandma, etc.)
+    /// - ICE (In Case of Emergency) prefix contacts
+    /// - Case insensitivity
     #[test]
-    fn test_close_family_classification() {
+    fn test_family_classification() {
         let classifier = ContactClassifier::new();
 
-        let cases = vec![
-            ContactInput {
-                name: "Mom".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Dad".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "ICE Mom".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Grandma".to_string(),
-                organization: String::new(),
-            },
+        // All family keywords must be detected
+        let family_keywords = [
+            "mom", "dad", "mama", "papa", "mother", "father", "grandma", "grandpa",
+            "grandmother", "grandfather", "aunt", "uncle", "sister", "brother", "sis", "bro",
+            "cousin", "nephew", "niece",
         ];
-
-        for case in cases {
+        for keyword in family_keywords {
+            let input = ContactInput {
+                name: keyword.to_string(),
+                organization: String::new(),
+            };
             assert_eq!(
-                classifier.classify(&case),
+                classifier.classify(&input),
                 ContactCategory::CloseFamily,
-                "Failed for: {}",
-                case.name
+                "Family keyword '{}' not detected",
+                keyword
+            );
+        }
+
+        // ICE (In Case of Emergency) prefix contacts
+        let ice_contacts = [
+            "ice mom",
+            "ice dad",
+            "ice mama",
+            "ice papa",
+            "ice aunt",
+            "ice uncle",
+            "ice grandmother",
+            "ice grandfather",
+        ];
+        for contact in ice_contacts {
+            let input = ContactInput {
+                name: contact.to_string(),
+                organization: String::new(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::CloseFamily,
+                "ICE contact '{}' not detected as family",
+                contact
+            );
+        }
+
+        // Case insensitivity
+        for name in ["MOM", "Mom", "mom", "MoM"] {
+            let input = ContactInput {
+                name: name.to_string(),
+                organization: String::new(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::CloseFamily,
+                "Case insensitivity failed for '{}'",
+                name
             );
         }
     }
 
+    /// Comprehensive test for all professional classification scenarios:
+    /// - Organization field presence triggers professional
+    /// - All professional titles (Dr., Prof., CEO, etc.)
+    /// - All professional credentials/suffixes (MD, PhD, CPA, etc.)
+    /// - Credentials after comma (Smith, MD)
+    /// - Case insensitivity
     #[test]
     fn test_professional_classification() {
         let classifier = ContactClassifier::new();
 
-        // CRITICAL: Organization field presence
-        let case1 = ContactInput {
+        // Organization field presence triggers professional
+        let input = ContactInput {
             name: "Sarah".to_string(),
             organization: "Acme Inc".to_string(),
         };
-        assert_eq!(classifier.classify(&case1), ContactCategory::Professional);
+        assert_eq!(classifier.classify(&input), ContactCategory::Professional);
 
-        // Professional titles
-        let cases = vec![
-            ContactInput {
-                name: "Dr. Smith".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Prof. Johnson".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "John Smith, MD".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Jane Doe PhD".to_string(),
-                organization: String::new(),
-            },
+        // All professional titles
+        let professional_titles = [
+            "Dr. Smith",
+            "Dr Smith",
+            "Prof. Jones",
+            "Prof Jones",
+            "Professor Williams",
+            "Boss Man",
+            "Manager Kim",
+            "Coach Taylor",
+            "Director Lee",
+            "VP Sales",
+            "CEO Bob",
+            "CTO Alice",
+            "CFO Carol",
+            "COO Dave",
+            "President Obama",
+            "Supervisor Chen",
+            "Lead Engineer",
+            "Senior Dev",
         ];
-
-        for case in cases {
+        for title in professional_titles {
+            let input = ContactInput {
+                name: title.to_string(),
+                organization: String::new(),
+            };
             assert_eq!(
-                classifier.classify(&case),
+                classifier.classify(&input),
                 ContactCategory::Professional,
-                "Failed for: {}",
-                case.name
+                "Professional title '{}' not detected",
+                title
+            );
+        }
+
+        // All professional credentials as suffix
+        let credentials = [
+            "John Doe MD",
+            "Jane Smith PhD",
+            "Bob CPA",
+            "Alice Esq",
+            "Tom DDS",
+            "Mary JD",
+            "Steve MBA",
+            "Lisa RN",
+            "Dave DVM",
+            "Kate DO",
+        ];
+        for cred in credentials {
+            let input = ContactInput {
+                name: cred.to_string(),
+                organization: String::new(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::Professional,
+                "Professional credential '{}' not detected",
+                cred
+            );
+        }
+
+        // Credentials after comma
+        let input = ContactInput {
+            name: "Smith, MD".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::Professional);
+
+        // Case insensitivity
+        for name in ["DR. SMITH", "Dr. smith", "dr. SMITH"] {
+            let input = ContactInput {
+                name: name.to_string(),
+                organization: String::new(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::Professional,
+                "Case insensitivity failed for '{}'",
+                name
             );
         }
     }
 
+    /// Comprehensive test for all casual/peer classification scenarios:
+    /// - All casual emojis (🔥, 🍺, 🎮, etc.)
+    /// - Informal descriptors (from gym, roommate, lol, etc.)
+    /// - All-lowercase names treated as casual nicknames
     #[test]
-    fn test_casual_peer_classification() {
+    fn test_casual_classification() {
         let classifier = ContactClassifier::new();
 
-        let cases = vec![
-            ContactInput {
-                name: "dave from gym".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Mike 🍺".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "alex lol".to_string(),
-                organization: String::new(),
-            },
+        // All casual emojis
+        let casual_emojis = [
+            '🔥', '🍻', '🤪', '🍕', '🎮', '⚽', '🏀', '🎸', '🎉', '💪', '🤘', '🍺', '🎯', '🚀',
+            '💯', '👊', '🤙', '😎', '🏆',
         ];
-
-        for case in cases {
+        for emoji in casual_emojis {
+            let input = ContactInput {
+                name: format!("Mike {}", emoji),
+                organization: String::new(),
+            };
             assert_eq!(
-                classifier.classify(&case),
+                classifier.classify(&input),
                 ContactCategory::CasualPeer,
-                "Failed for: {}",
-                case.name
+                "Casual emoji '{}' not detected",
+                emoji
             );
         }
-    }
 
-    #[test]
-    fn test_formal_neutral_classification() {
-        let classifier = ContactClassifier::new();
-
-        let cases = vec![
-            ContactInput {
-                name: "John Smith".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Uber Driver".to_string(),
-                organization: String::new(),
-            },
-            ContactInput {
-                name: "Plumber".to_string(),
-                organization: String::new(),
-            },
+        // Informal descriptors
+        let informal = [
+            "dave from gym",
+            "mike roommate",
+            "sarah lol",
+            "bob haha",
+            "alice buddy",
+            "tom pal",
         ];
-
-        for case in cases {
+        for name in informal {
+            let input = ContactInput {
+                name: name.to_string(),
+                organization: String::new(),
+            };
             assert_eq!(
-                classifier.classify(&case),
-                ContactCategory::FormalNeutral,
-                "Failed for: {}",
-                case.name
+                classifier.classify(&input),
+                ContactCategory::CasualPeer,
+                "Informal descriptor '{}' not detected",
+                name
             );
         }
+
+        // All-lowercase names treated as casual nicknames
+        let input = ContactInput {
+            name: "john".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::CasualPeer);
+
+        // Emoji-only names with casual emojis
+        let input = ContactInput {
+            name: "🔥🍺🎮".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::CasualPeer);
     }
 
+    /// Comprehensive test for edge cases and formal/neutral fallback:
+    /// - Empty and whitespace-only names
+    /// - Proper case names (formal neutral)
+    /// - Special characters
+    /// - Unicode/non-Latin names (documents known bug)
+    /// - Very long names
+    /// - Embedded keyword substring matching (documents known bug)
     #[test]
-    fn test_batch_classification() {
+    fn test_edge_cases() {
         let classifier = ContactClassifier::new();
 
+        // Empty name falls through to FormalNeutral
+        let input = ContactInput {
+            name: "".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::FormalNeutral);
+
+        // Whitespace-only name
+        let input = ContactInput {
+            name: "   \t\n   ".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::FormalNeutral);
+
+        // Proper case names without indicators are formal neutral
+        let formal_names = ["John Smith", "Uber Driver", "Plumber", "John"];
+        for name in formal_names {
+            let input = ContactInput {
+                name: name.to_string(),
+                organization: String::new(),
+            };
+            assert_eq!(
+                classifier.classify(&input),
+                ContactCategory::FormalNeutral,
+                "Formal name '{}' not classified correctly",
+                name
+            );
+        }
+
+        // Special characters should not panic
+        let input = ContactInput {
+            name: "O'Brien & Co.".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::FormalNeutral);
+
+        // Unicode/non-Latin names - documents known bug where caseless scripts
+        // are incorrectly treated as all-lowercase and classified as CasualPeer
+        let input = ContactInput {
+            name: "日本語".to_string(),
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::CasualPeer); // BUG: should be FormalNeutral
+
+        // Very long names should not panic
+        let input = ContactInput {
+            name: "A".repeat(1000),
+            organization: String::new(),
+        };
+        let _ = classifier.classify(&input); // Just ensure no panic
+
+        // Embedded keyword substring matching - documents known bug where
+        // surnames containing partner keywords are misclassified
+        let input = ContactInput {
+            name: "grandmother".to_string(), // contains "mother", correctly matches family
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::CloseFamily);
+
+        let input = ContactInput {
+            name: "Lovelock".to_string(), // surname containing "love"
+            organization: String::new(),
+        };
+        assert_eq!(classifier.classify(&input), ContactCategory::Partner); // BUG: should be FormalNeutral
+    }
+
+    /// Test batch classification and JSON serialization
+    #[test]
+    fn test_batch_operations() {
+        let classifier = ContactClassifier::new();
+
+        // Batch classification with all categories
         let inputs = vec![
             ContactInput {
                 name: "Mom".to_string(),
@@ -524,9 +727,7 @@ mod tests {
                 organization: String::new(),
             },
         ];
-
         let result = classifier.classify_batch(&inputs);
-
         assert_eq!(result.get("Mom"), Some(&ContactCategory::CloseFamily));
         assert_eq!(result.get("❤️ Alex"), Some(&ContactCategory::Partner));
         assert_eq!(result.get("Sarah"), Some(&ContactCategory::Professional));
@@ -538,12 +739,13 @@ mod tests {
             result.get("John Smith"),
             Some(&ContactCategory::FormalNeutral)
         );
-    }
 
-    #[test]
-    fn test_json_serialization() {
-        let classifier = ContactClassifier::new();
+        // Empty batch
+        let empty: Vec<ContactInput> = vec![];
+        assert!(classifier.classify_batch(&empty).is_empty());
+        assert_eq!(classifier.classify_batch_json(&empty), "{}");
 
+        // JSON serialization
         let inputs = vec![
             ContactInput {
                 name: "Mom".to_string(),
@@ -554,10 +756,8 @@ mod tests {
                 organization: "Acme Inc".to_string(),
             },
         ];
-
         let json = classifier.classify_batch_json(&inputs);
         let parsed: HashMap<String, ContactCategory> = serde_json::from_str(&json).unwrap();
-
         assert_eq!(parsed.get("Mom"), Some(&ContactCategory::CloseFamily));
         assert_eq!(
             parsed.get("Sarah Work"),
@@ -565,576 +765,98 @@ mod tests {
         );
     }
 
-    // ========== Additional comprehensive tests ==========
-
+    /// Test contact cache operations (upsert, get, frequency tracking)
     #[test]
-    fn test_empty_name() {
+    fn test_contact_cache() {
         let classifier = ContactClassifier::new();
 
-        let input = ContactInput {
-            name: "".to_string(),
-            organization: String::new(),
-        };
-
-        // Empty name should fall through to FormalNeutral
-        let result = classifier.classify(&input);
-        assert_eq!(result, ContactCategory::FormalNeutral);
-    }
-
-    #[test]
-    fn test_whitespace_only_name() {
-        let classifier = ContactClassifier::new();
-
-        let input = ContactInput {
-            name: "   \t\n   ".to_string(),
-            organization: String::new(),
-        };
-
-        let result = classifier.classify(&input);
-        assert_eq!(result, ContactCategory::FormalNeutral);
-    }
-
-    #[test]
-    fn test_all_partner_keywords() {
-        let classifier = ContactClassifier::new();
-
-        let partner_terms = vec![
-            "bae",
-            "hubby",
-            "wife",
-            "wifey",
-            "husband",
-            "my love",
-            "baby",
-            "babe",
-            "love",
-            "honey",
-            "sweetheart",
-            "darling",
-            "dear",
-            "sweetie",
-            "boo",
-        ];
-
-        for term in partner_terms {
-            let input = ContactInput {
-                name: term.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::Partner,
-                "Partner keyword '{}' not detected",
-                term
-            );
-        }
-    }
-
-    #[test]
-    fn test_all_family_keywords() {
-        let classifier = ContactClassifier::new();
-
-        let family_terms = vec![
-            "mom",
-            "dad",
-            "mama",
-            "papa",
-            "mother",
-            "father",
-            "grandma",
-            "grandpa",
-            "grandmother",
-            "grandfather",
-            "aunt",
-            "uncle",
-            "sister",
-            "brother",
-            "sis",
-            "bro",
-            "cousin",
-            "nephew",
-            "niece",
-        ];
-
-        for term in family_terms {
-            let input = ContactInput {
-                name: term.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::CloseFamily,
-                "Family keyword '{}' not detected",
-                term
-            );
-        }
-    }
-
-    #[test]
-    fn test_all_professional_titles() {
-        let classifier = ContactClassifier::new();
-
-        let professional_titles = vec![
-            "Dr. Smith",
-            "Dr Smith",
-            "Prof. Jones",
-            "Prof Jones",
-            "Professor Williams",
-            "Boss Man",
-            "Manager Kim",
-            "Coach Taylor",
-            "Director Lee",
-            "VP Sales",
-            "CEO Bob",
-            "CTO Alice",
-            "CFO Carol",
-            "COO Dave",
-            "President Obama",
-            "Supervisor Chen",
-            "Lead Engineer",
-            "Senior Dev",
-        ];
-
-        for title in professional_titles {
-            let input = ContactInput {
-                name: title.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::Professional,
-                "Professional title '{}' not detected",
-                title
-            );
-        }
-    }
-
-    #[test]
-    fn test_professional_credentials() {
-        let classifier = ContactClassifier::new();
-
-        let credentials = vec![
-            "John Doe MD",
-            "Jane Smith PhD",
-            "Bob CPA",
-            "Alice Esq",
-            "Tom DDS",
-            "Mary JD",
-            "Steve MBA",
-            "Lisa RN",
-            "Dave DVM",
-            "Kate DO",
-        ];
-
-        for cred in credentials {
-            let input = ContactInput {
-                name: cred.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::Professional,
-                "Professional credential '{}' not detected",
-                cred
-            );
-        }
-    }
-
-    #[test]
-    fn test_professional_credentials_after_comma() {
-        let classifier = ContactClassifier::new();
-
-        let input = ContactInput {
-            name: "Smith, MD".to_string(),
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input), ContactCategory::Professional);
-    }
-
-    #[test]
-    fn test_ice_prefix_contacts() {
-        let classifier = ContactClassifier::new();
-
-        let ice_contacts = vec![
-            "ice mom",
-            "ice dad",
-            "ice mama",
-            "ice papa",
-            "ice aunt",
-            "ice uncle",
-            "ice grandmother",
-            "ice grandfather",
-        ];
-
-        for contact in ice_contacts {
-            let input = ContactInput {
-                name: contact.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::CloseFamily,
-                "ICE contact '{}' not detected as family",
-                contact
-            );
-        }
-    }
-
-    #[test]
-    fn test_all_partner_emojis() {
-        let classifier = ContactClassifier::new();
-
-        let partner_emojis = vec![
-            '❤', '💕', '💖', '💗', '💘', '💝', '💞', '💟', '💙', '💚', '💛', '🧡', '💜', '🖤',
-            '🤍', '🤎', '💋', '💍', '💑', '💏', '👩', '👨', '❣',
-        ];
-
-        for emoji in partner_emojis {
-            let input = ContactInput {
-                name: format!("Alex {}", emoji),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::Partner,
-                "Partner emoji '{}' not detected",
-                emoji
-            );
-        }
-    }
-
-    #[test]
-    fn test_all_casual_emojis() {
-        let classifier = ContactClassifier::new();
-
-        let casual_emojis = vec![
-            '🔥', '🍻', '🤪', '🍕', '🎮', '⚽', '🏀', '🎸', '🎉', '💪', '🤘', '🍺', '🎯', '🚀',
-            '💯', '👊', '🤙', '😎', '🏆',
-        ];
-
-        for emoji in casual_emojis {
-            let input = ContactInput {
-                name: format!("Mike {}", emoji),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::CasualPeer,
-                "Casual emoji '{}' not detected",
-                emoji
-            );
-        }
-    }
-
-    #[test]
-    fn test_informal_descriptors() {
-        let classifier = ContactClassifier::new();
-
-        let informal = vec![
-            "dave from gym",
-            "mike roommate",
-            "sarah lol",
-            "bob haha",
-            "alice buddy",
-            "tom pal",
-        ];
-
-        for name in informal {
-            let input = ContactInput {
-                name: name.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                ContactCategory::CasualPeer,
-                "Informal descriptor '{}' not detected",
-                name
-            );
-        }
-    }
-
-    #[test]
-    fn test_all_lowercase_name_is_casual() {
-        let classifier = ContactClassifier::new();
-
-        // all lowercase names (without other indicators) should be casual
-        let input = ContactInput {
-            name: "john".to_string(),
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input), ContactCategory::CasualPeer);
-    }
-
-    #[test]
-    fn test_proper_case_name_is_formal() {
-        let classifier = ContactClassifier::new();
-
-        // properly cased name without other indicators should be formal
-        let input = ContactInput {
-            name: "John".to_string(),
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input), ContactCategory::FormalNeutral);
-    }
-
-    #[test]
-    fn test_case_insensitive_keywords() {
-        let classifier = ContactClassifier::new();
-
-        // Partner keywords should be case-insensitive
-        let inputs = vec![
-            ("BAE", ContactCategory::Partner),
-            ("Bae", ContactCategory::Partner),
-            ("MOM", ContactCategory::CloseFamily),
-            ("Mom", ContactCategory::CloseFamily),
-            ("DR. SMITH", ContactCategory::Professional),
-            ("Dr. smith", ContactCategory::Professional),
-        ];
-
-        for (name, expected) in inputs {
-            let input = ContactInput {
-                name: name.to_string(),
-                organization: String::new(),
-            };
-            assert_eq!(
-                classifier.classify(&input),
-                expected,
-                "Case insensitivity failed for '{}'",
-                name
-            );
-        }
-    }
-
-    #[test]
-    fn test_priority_partner_over_family() {
-        // If someone is named "Mom" but has a heart emoji, partner wins
-        let classifier = ContactClassifier::new();
-
-        let input = ContactInput {
-            name: "❤️ Mom".to_string(), // unlikely but tests priority
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input), ContactCategory::Partner);
-    }
-
-    #[test]
-    fn test_contact_cache_operations() {
-        let classifier = ContactClassifier::new();
-
-        // Create and upsert a contact
+        // Upsert and retrieve
         let contact = Contact::new(
             "Test Contact".to_string(),
             Some("Test Org".to_string()),
             ContactCategory::Professional,
         );
         classifier.upsert_contact(contact.clone());
-
-        // Retrieve it
-        let retrieved = classifier.get_contact("Test Contact");
-        assert!(retrieved.is_some());
-        let retrieved = retrieved.unwrap();
+        let retrieved = classifier.get_contact("Test Contact").unwrap();
         assert_eq!(retrieved.name, "Test Contact");
         assert_eq!(retrieved.category, ContactCategory::Professional);
 
-        // Get non-existent
+        // Get non-existent returns None
         assert!(classifier.get_contact("Nonexistent").is_none());
-    }
 
-    #[test]
-    fn test_get_or_create_contact() {
-        let classifier = ContactClassifier::new();
-
+        // Get or create
         let input = ContactInput {
             name: "New Person".to_string(),
             organization: "Some Company".to_string(),
         };
-
-        // First call creates
         let contact1 = classifier.get_or_create_contact(&input);
         assert_eq!(contact1.name, "New Person");
         assert_eq!(contact1.category, ContactCategory::Professional);
-
-        // Store it
         classifier.upsert_contact(contact1.clone());
-
-        // Second call retrieves existing
         let contact2 = classifier.get_or_create_contact(&input);
         assert_eq!(contact2.id, contact1.id);
-    }
 
-    #[test]
-    fn test_record_interaction() {
-        let classifier = ContactClassifier::new();
-
+        // Record interaction
         let contact = Contact::new(
             "Interacted".to_string(),
             None,
             ContactCategory::FormalNeutral,
         );
         classifier.upsert_contact(contact);
-
-        // Record interaction
         classifier.record_interaction("Interacted");
-
-        // Check it was recorded
         let retrieved = classifier.get_contact("Interacted").unwrap();
         assert_eq!(retrieved.frequency, 1);
         assert!(retrieved.last_contacted.is_some());
-    }
 
-    #[test]
-    fn test_get_frequent_contacts() {
-        let classifier = ContactClassifier::new();
-
-        // Create contacts with different frequencies
+        // Get frequent contacts sorted by frequency
         let mut c1 = Contact::new("Low".to_string(), None, ContactCategory::FormalNeutral);
         c1.frequency = 1;
         let mut c2 = Contact::new("High".to_string(), None, ContactCategory::FormalNeutral);
         c2.frequency = 10;
         let mut c3 = Contact::new("Medium".to_string(), None, ContactCategory::FormalNeutral);
         c3.frequency = 5;
-
         classifier.upsert_contact(c1);
         classifier.upsert_contact(c2);
         classifier.upsert_contact(c3);
-
         let frequent = classifier.get_frequent_contacts(2);
         assert_eq!(frequent.len(), 2);
         assert_eq!(frequent[0].name, "High");
         assert_eq!(frequent[1].name, "Medium");
     }
 
+    /// Test serde serialization/deserialization
     #[test]
-    fn test_batch_classification_empty() {
-        let classifier = ContactClassifier::new();
-        let inputs: Vec<ContactInput> = vec![];
-
-        let result = classifier.classify_batch(&inputs);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_batch_classification_json_empty() {
-        let classifier = ContactClassifier::new();
-        let inputs: Vec<ContactInput> = vec![];
-
-        let json = classifier.classify_batch_json(&inputs);
-        assert_eq!(json, "{}");
-    }
-
-    #[test]
-    fn test_default_impl() {
-        let classifier = ContactClassifier::default();
-        // Should create a working classifier
-        let input = ContactInput {
-            name: "Mom".to_string(),
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input), ContactCategory::CloseFamily);
-    }
-
-    #[test]
-    fn test_contact_input_deserialization() {
+    fn test_serde() {
+        // ContactInput deserialization
         let json = r#"{"name": "Test", "organization": ""}"#;
         let input: ContactInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.name, "Test");
         assert_eq!(input.organization, "");
 
-        // organization should be optional (default to empty)
+        // organization defaults to empty when missing
         let json2 = r#"{"name": "Test2"}"#;
         let input2: ContactInput = serde_json::from_str(json2).unwrap();
         assert_eq!(input2.name, "Test2");
         assert_eq!(input2.organization, "");
-    }
 
-    #[test]
-    fn test_classification_result_serialization() {
+        // ClassificationResult serialization
         let result = ClassificationResult {
             name: "Test".to_string(),
             category: ContactCategory::Partner,
         };
-
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("Test"));
         assert!(json.contains("partner"));
     }
 
+    /// Test Default impl
     #[test]
-    fn test_special_characters_in_name() {
-        let classifier = ContactClassifier::new();
-
+    fn test_default_impl() {
+        let classifier = ContactClassifier::default();
         let input = ContactInput {
-            name: "O'Brien & Co.".to_string(),
-            organization: String::new(),
-        };
-        // Should not panic, should classify as formal neutral
-        let result = classifier.classify(&input);
-        assert_eq!(result, ContactCategory::FormalNeutral);
-    }
-
-    #[test]
-    fn test_unicode_name() {
-        let classifier = ContactClassifier::new();
-
-        let input = ContactInput {
-            name: "日本語".to_string(), // Japanese characters
-            organization: String::new(),
-        };
-        // BUG EXPOSURE: Japanese characters have no uppercase, so the "all lowercase" check
-        // treats them as casual. This classifies non-Latin names incorrectly as CasualPeer
-        // when they should be FormalNeutral.
-        let result = classifier.classify(&input);
-        assert_eq!(result, ContactCategory::CasualPeer); // Documents buggy behavior
-    }
-
-    #[test]
-    fn test_very_long_name() {
-        let classifier = ContactClassifier::new();
-
-        let input = ContactInput {
-            name: "A".repeat(1000),
-            organization: String::new(),
-        };
-        // Should not panic
-        let _ = classifier.classify(&input);
-    }
-
-    #[test]
-    fn test_name_with_only_emojis() {
-        let classifier = ContactClassifier::new();
-
-        let input = ContactInput {
-            name: "❤️💕💖".to_string(), // only partner emojis
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input), ContactCategory::Partner);
-
-        let input2 = ContactInput {
-            name: "🔥🍺🎮".to_string(), // only casual emojis
-            organization: String::new(),
-        };
-        assert_eq!(classifier.classify(&input2), ContactCategory::CasualPeer);
-    }
-
-    #[test]
-    fn test_embedded_keyword() {
-        // BUG EXPOSURE: Keywords match anywhere in the name
-        let classifier = ContactClassifier::new();
-
-        // "mother" is embedded in "grandmother" - both should match family
-        let input = ContactInput {
-            name: "grandmother".to_string(),
+            name: "Mom".to_string(),
             organization: String::new(),
         };
         assert_eq!(classifier.classify(&input), ContactCategory::CloseFamily);
-
-        // But what about "lovelock" containing "love"?
-        let input2 = ContactInput {
-            name: "Lovelock".to_string(), // surname containing "love"
-            organization: String::new(),
-        };
-        // This will incorrectly classify as Partner because "love" is found
-        assert_eq!(classifier.classify(&input2), ContactCategory::Partner);
-        // BUG: Surname "Lovelock" should probably be FormalNeutral
     }
 }

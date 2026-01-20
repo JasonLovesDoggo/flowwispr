@@ -1,7 +1,7 @@
 //! Provider abstraction layer for transcription and completion services
 //!
-//! Supports pluggable providers for cloud (OpenAI, ElevenLabs, Anthropic, Base10) and local services.
-mod base10;
+//! Supports pluggable providers for cloud (OpenAI, ElevenLabs, Anthropic, Gemini) and local services.
+mod auto;
 mod completion;
 mod gemini;
 mod local_whisper;
@@ -10,8 +10,8 @@ mod openrouter;
 mod streaming;
 mod transcription;
 
-pub use base10::{
-    Base10TranscriptionProvider, CorrectionPair, CorrectionValidation, validate_corrections,
+pub use auto::{
+    AutoTranscriptionProvider, CorrectionPair, CorrectionValidation, validate_corrections,
 };
 pub use completion::{CompletionProvider, CompletionRequest, CompletionResponse, TokenUsage};
 pub use gemini::{GeminiCompletionProvider, GeminiTranscriptionProvider};
