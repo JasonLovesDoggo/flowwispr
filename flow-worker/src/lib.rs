@@ -4,7 +4,6 @@
 //! Supports Cloudflare Workers AI (default) or Base10 as transcription backend.
 //! API keys stored as Cloudflare secrets: BASETEN_API_KEY (optional), OPENROUTER_API_KEY
 
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use worker::{event, Env, Fetch, Headers, Method, Request, RequestInit, Response, Result};
 
@@ -115,7 +114,7 @@ impl TranscriptionProvider {
 
 #[derive(Debug, Serialize)]
 struct CloudflareWhisperInput {
-    audio: Vec<f64>,
+    audio: String, // Base64 encoded audio data
     #[serde(skip_serializing_if = "Option::is_none")]
     task: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,14 +325,6 @@ async fn call_cloudflare_ai(
     audio_language: String,
     user_prompt: Option<String>,
 ) -> Result<String> {
-    // Decode base64 to raw bytes
-    let audio_bytes = STANDARD
-        .decode(&audio_b64)
-        .map_err(|e| worker::Error::RustError(format!("Base64 decode error: {}", e)))?;
-
-    // Convert bytes to f64 array (Cloudflare AI expects array of numbers)
-    let audio: Vec<f64> = audio_bytes.iter().map(|&b| f64::from(b)).collect();
-
     // Build initial_prompt with "Hey Flow." prefix (same as Base10)
     let initial_prompt = match user_prompt {
         Some(extra) if !extra.is_empty() => Some(format!("Hey Flow. {}", extra)),
@@ -347,31 +338,23 @@ async fn call_cloudflare_ai(
         Some(audio_language)
     };
 
+    worker::console_log!("[DEBUG] Calling Cloudflare AI Whisper model: {}", CLOUDFLARE_WHISPER_MODEL);
+    worker::console_log!("[DEBUG] Audio b64 len: {}, language: {:?}", audio_b64.len(), language);
+
     let input = CloudflareWhisperInput {
-        audio,
+        audio: audio_b64, // Pass base64 string directly
         task: Some("transcribe".to_string()),
         language,
         initial_prompt,
     };
 
-    worker::console_log!("[DEBUG] Calling Cloudflare AI Whisper model");
-
     let ai = env.ai("AI")?;
-    let input_value = serde_json::to_value(&input)
-        .map_err(|e| worker::Error::RustError(format!("JSON serialize error: {}", e)))?;
-
-    let response = ai.run(CLOUDFLARE_WHISPER_MODEL, input_value).await?;
-
-    let whisper_response: CloudflareWhisperResponse = serde_json::from_value(response)
-        .map_err(|e| worker::Error::RustError(format!("JSON parse error: {}", e)))?;
+    let whisper_response: CloudflareWhisperResponse = ai.run(CLOUDFLARE_WHISPER_MODEL, &input).await?;
 
     let text = whisper_response.text.trim().to_string();
-    if text.is_empty() {
-        return Err(worker::Error::RustError(
-            "No transcription returned from Cloudflare AI".to_string(),
-        ));
-    }
+    worker::console_log!("[DEBUG] Cloudflare AI response: {:?}", text);
 
+    // Empty transcription is valid (silence), just return it
     Ok(text)
 }
 
