@@ -18,6 +18,9 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cbindgen for C header generation
+        run: cargo install cbindgen
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:

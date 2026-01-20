@@ -1,6 +1,6 @@
 [package]
 name = "flow"
-version = "0.1.20"
+version = "0.2.0"
 edition = "2024"
 
 [lib]
@@ -37,6 +37,3 @@ candle-transformers = { version = "0.9", features = ["metal", "accelerate"] }
 hf-hub = { version = "0.4.1", features = ["tokio"] }
 hound = "3"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
-
-[build-dependencies]
-cbindgen = "0.27"

@@ -29,7 +29,7 @@ fn main() {
         .arg(&output_file)
         .current_dir(&crate_dir)
         .status()
-        .expect("Failed to run cbindgen");
+        .expect("Failed to run cbindgen - ensure it's installed via: cargo install cbindgen");
 
     if !status.success() {
         panic!("cbindgen generation failed");
