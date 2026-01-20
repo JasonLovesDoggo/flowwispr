@@ -439,7 +439,7 @@ final class AppState: ObservableObject {
         let totalStart = CFAbsoluteTimeGetCurrent()
 
         // Refresh accessibility status before recording
-        var t0 = CFAbsoluteTimeGetCurrent()
+        let t0 = CFAbsoluteTimeGetCurrent()
         refreshAccessibilityStatus()
         log("⏱️ [TIMING] refreshAccessibilityStatus: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms")
 
@@ -485,9 +485,11 @@ final class AppState: ObservableObject {
                 Task.detached { [weak self] in
                     let textContext = AccessibilityContext.extractFocusedTextContext()
                     let ide = AccessibilityContext.extractIDEContext()
-                    await MainActor.run {
-                        self?.textFieldContext = textContext
-                        self?.ideContext = ide
+                    if let self = self {
+                        await MainActor.run {
+                            self.textFieldContext = textContext
+                            self.ideContext = ide
+                        }
                     }
                 }
 

@@ -293,8 +293,9 @@ final class EditLearningService {
                 )
 
                 // Show toast notification on main thread
+                let wordsToShow = learnedWords
                 await MainActor.run {
-                    showLearnedWordsToast(words: learnedWords)
+                    showLearnedWordsToast(words: wordsToShow)
                 }
             }
         }
